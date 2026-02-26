@@ -835,6 +835,35 @@ class DataCollector {
       }
     });
     
+    // 补充内置 provider（github-copilot / openai-codex 等不在配置文件里的）
+    const configuredProviders = new Set(result.map(m => m.provider));
+    const builtinProviders = ['github-copilot', 'openai-codex'];
+
+    for (const bp of builtinProviders) {
+      if (!configuredProviders.has(bp)) {
+        try {
+          const usageData = await this.getModelUsageStats();
+          const bpModels = (usageData.byModel || []).filter(m => m.provider === bp);
+          for (const m of bpModels) {
+            if ((m.tokens || 0) > 0) {
+              result.push({
+                provider: bp,
+                id: m.modelId,
+                name: m.modelName || m.modelId,
+                cost: {},
+                contextWindow: 0,
+                maxTokens: 0,
+                quotaUsed: 0,
+                quotaTotal: 0,
+                status: 'normal',
+                quotaExtra: null
+              });
+            }
+          }
+        } catch(e) { /* 静默失败 */ }
+      }
+    }
+
     return result;
   }
 
@@ -1251,7 +1280,7 @@ class DataCollector {
 
   // 记录模型使用统计
   // 从 session 文件中真实统计模型使用量（四个维度）
-  async collectModelUsageStats(days = 30) {
+  async collectModelUsageStats(days = null) {
     try {
       const config = await this.getConfig();
       const agents = await this.getAgentsList();
@@ -1267,26 +1296,33 @@ class DataCollector {
         }
       }
 
-      const cutoffDate = new Date();
-      cutoffDate.setDate(cutoffDate.getDate() - days);
+      // days=null 表示统计所有历史，不限制时间范围
+      const cutoffDate = days ? (() => {
+        const d = new Date();
+        d.setDate(d.getDate() - days);
+        return d;
+      })() : null;
 
       // 聚合容器
       const byModelMap = {};    // key: "provider/modelId"
       const byAgentMap = {};    // key: agentId
       const byDayMap = {};      // key: "YYYY-MM-DD"
       let totalCalls = 0;
+      let totalTokens = 0;
 
       for (const agent of agents) {
         const sessionsDir = path.join(AGENTS_DIR, agent.id, 'sessions');
         const files = await fs.readdir(sessionsDir).catch(() => []);
-        const sessionFiles = files.filter(f => f.endsWith('.jsonl') && !f.includes('.deleted.'));
+        // 包含所有 .jsonl 文件（包括 .reset. 文件）但排除 .deleted. 以确保历史统计完整
+        const sessionFiles = files.filter(f => 
+          (f.endsWith('.jsonl') || f.includes('.jsonl.reset.')) && !f.includes('.deleted.')
+        );
 
         for (const file of sessionFiles) {
           const filePath = path.join(sessionsDir, file);
           const stat = await fs.stat(filePath).catch(() => null);
           if (!stat) continue;
-          // 跳过太旧的文件（修改时间早于统计范围）
-          if (stat.mtime < cutoffDate) continue;
+          // 不再使用 mtime 过滤，改为按消息 timestamp 过滤，确保长期休眠会话的历史不丢失
 
           const content = await fs.readFile(filePath, 'utf-8').catch(() => '');
           if (!content) continue;
@@ -1313,7 +1349,8 @@ class DataCollector {
               // 统计 assistant 消息 = 一次模型调用
               if (entry.type === 'message' && entry.message && entry.message.role === 'assistant') {
                 const ts = entry.timestamp ? new Date(entry.timestamp) : null;
-                if (ts && ts < cutoffDate) continue;
+                // 按消息时间戳过滤（如果设置了时间范围）
+                if (cutoffDate && ts && ts < cutoffDate) continue;
 
                 // 确定使用的模型
                 let modelKey = currentModel;
@@ -1324,6 +1361,14 @@ class DataCollector {
 
                 const dateStr = ts ? ts.toISOString().substring(0, 10) : 'unknown';
 
+                // 提取 token 使用量
+                const usage = entry.message.usage || {};
+                const tokens = usage.totalTokens || 0;
+                const inputTokens = usage.input || 0;
+                const outputTokens = usage.output || 0;
+                const cacheReadTokens = usage.cacheRead || 0;
+                const cacheWriteTokens = usage.cacheWrite || 0;
+
                 // 按模型
                 if (!byModelMap[modelKey]) {
                   const parts = modelKey.split('/');
@@ -1331,10 +1376,20 @@ class DataCollector {
                     provider: parts[0],
                     modelId: parts.slice(1).join('/'),
                     modelName: modelNameMap[modelKey] || parts.slice(1).join('/'),
-                    count: 0
+                    count: 0,
+                    tokens: 0,
+                    inputTokens: 0,
+                    outputTokens: 0,
+                    cacheReadTokens: 0,
+                    cacheWriteTokens: 0
                   };
                 }
                 byModelMap[modelKey].count++;
+                byModelMap[modelKey].tokens += tokens;
+                byModelMap[modelKey].inputTokens += inputTokens;
+                byModelMap[modelKey].outputTokens += outputTokens;
+                byModelMap[modelKey].cacheReadTokens += cacheReadTokens;
+                byModelMap[modelKey].cacheWriteTokens += cacheWriteTokens;
 
                 // 按 Agent
                 if (!byAgentMap[agent.id]) {
@@ -1343,20 +1398,29 @@ class DataCollector {
                     agentName: agent.name || agent.id,
                     agentEmoji: agent.emoji || '🤖',
                     models: {},
-                    total: 0
+                    total: 0,
+                    totalTokens: 0
                   };
                 }
-                byAgentMap[agent.id].models[modelKey] = (byAgentMap[agent.id].models[modelKey] || 0) + 1;
+                if (!byAgentMap[agent.id].models[modelKey]) {
+                  byAgentMap[agent.id].models[modelKey] = { count: 0, tokens: 0 };
+                }
+                byAgentMap[agent.id].models[modelKey].count++;
+                byAgentMap[agent.id].models[modelKey].tokens += tokens;
                 byAgentMap[agent.id].total++;
+                byAgentMap[agent.id].totalTokens += tokens;
 
                 // 按天
                 if (!byDayMap[dateStr]) {
-                  byDayMap[dateStr] = { date: dateStr, counts: {}, total: 0 };
+                  byDayMap[dateStr] = { date: dateStr, counts: {}, tokens: {}, total: 0, totalTokens: 0 };
                 }
                 byDayMap[dateStr].counts[modelKey] = (byDayMap[dateStr].counts[modelKey] || 0) + 1;
+                byDayMap[dateStr].tokens[modelKey] = (byDayMap[dateStr].tokens[modelKey] || 0) + tokens;
                 byDayMap[dateStr].total++;
+                byDayMap[dateStr].totalTokens += tokens;
 
                 totalCalls++;
+                totalTokens += tokens;
               }
             } catch (e) { /* skip bad line */ }
           }
@@ -1377,10 +1441,13 @@ class DataCollector {
         byDay,
         summary: {
           totalCalls,
+          totalTokens,
           totalModels: byModel.length,
           totalAgents: byAgent.length,
           dateRange,
-          days
+          days,
+          totalCacheReadTokens: Object.values(byModelMap).reduce((s,m)=>s+(m.cacheReadTokens||0),0),
+          totalCacheWriteTokens: Object.values(byModelMap).reduce((s,m)=>s+(m.cacheWriteTokens||0),0)
         }
       };
     } catch (error) {
@@ -1396,10 +1463,12 @@ class DataCollector {
   async getModelUsageStats(days = 30) {
     // 缓存 60 秒，避免频繁全量扫描
     const now = Date.now();
-    if (this._modelUsageCache && this._modelUsageCacheTime > now - 60000 && this._modelUsageCache.summary.days === days) {
+    const cacheKey = `days_${days || 'all'}`;
+    if (this._modelUsageCache && this._modelUsageCache._key === cacheKey && this._modelUsageCacheTime > now - 60000) {
       return this._modelUsageCache;
     }
     const result = await this.collectModelUsageStats(days);
+    result._key = cacheKey; // 标记缓存键
     this._modelUsageCache = result;
     this._modelUsageCacheTime = now;
     return result;
@@ -1434,33 +1503,18 @@ class DataCollector {
     }
   }
 
-  // 获取模型使用统计
-  async getModelsStats() {
+  // 获取模型使用统计（复用实时统计逻辑）
+  async getModelsStats(days = null) {
     try {
-      const history = await this._readHistoryFile('models-stats.json');
-      const recentData = (history.data || []).slice(-30); // 最近30次记录
+      // days=null 表示统计所有历史（不限制时间范围）
+      const stats = await this.getModelUsageStats(days);
       
-      // 聚合使用统计
-      const usageMap = {};
-      
-      recentData.forEach(record => {
-        if (record.usage) {
-          Object.keys(record.usage).forEach(key => {
-            if (!usageMap[key]) {
-              usageMap[key] = {
-                provider: record.usage[key].provider,
-                modelId: record.usage[key].modelId,
-                modelName: record.usage[key].modelName,
-                count: 0
-              };
-            }
-            usageMap[key].count += record.usage[key].count || 0;
-          });
-        }
-      });
+      if (!stats || !stats.byModel || stats.byModel.length === 0) {
+        return { labels: [], data: [], details: [] };
+      }
 
-      const models = Object.values(usageMap);
-      const total = models.reduce((sum, m) => sum + m.count, 0);
+      const models = stats.byModel;
+      const total = stats.summary.totalCalls;
 
       return {
         labels: models.map(m => m.modelName),
@@ -1469,7 +1523,7 @@ class DataCollector {
           name: m.modelName,
           provider: m.provider,
           count: m.count,
-          percentage: total > 0 ? ((m.count / total) * 100).toFixed(1) : 0
+          percentage: total > 0 ? ((m.count / total) * 100).toFixed(1) : '0'
         }))
       };
     } catch (error) {

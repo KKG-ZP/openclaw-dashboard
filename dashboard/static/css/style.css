@@ -8,7 +8,9 @@
     --bg-primary: #f5f7fa;
     --bg-secondary: #ffffff;
     --bg-card: #ffffff;
+    --card-bg: #ffffff; /* 兼容旧变量名，修复部分卡片背景丢失 */
     --border-color: rgba(59, 130, 246, 0.2);
+    --border: rgba(59, 130, 246, 0.2); /* 兼容旧变量名，修复边框显示不稳定 */
     --text-primary: #1e293b;
     --text-secondary: #64748b;
     --text-muted: #94a3b8;
@@ -135,6 +137,54 @@ body {
 /* 工具栏按钮组 */
 .header-right > * {
     flex-shrink: 0;
+}
+
+/* 移动端监控导航 */
+.mobile-monitor-nav {
+    display: none;
+}
+
+@media (max-width: 1024px) {
+    body {
+        padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+    }
+
+    .mobile-monitor-nav {
+        position: sticky;
+        top: 0;
+        z-index: 50;
+        display: flex;
+        gap: 8px;
+        overflow-x: auto;
+        padding: 8px 2px 10px;
+        margin: -4px 0 14px;
+        background: linear-gradient(180deg, rgba(245, 247, 250, 0.95), rgba(245, 247, 250, 0.82));
+        backdrop-filter: blur(8px);
+    }
+
+    .mobile-monitor-nav-btn {
+        border: 1px solid var(--border-color);
+        background: var(--bg-secondary);
+        color: var(--text-secondary);
+        border-radius: 999px;
+        padding: 7px 12px;
+        font-size: 0.8em;
+        line-height: 1;
+        white-space: nowrap;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+
+    .mobile-monitor-nav-btn.active {
+        color: #fff;
+        background: var(--accent);
+        border-color: var(--accent);
+        box-shadow: 0 4px 10px rgba(59, 130, 246, 0.25);
+    }
+
+    .mobile-monitor-nav::-webkit-scrollbar {
+        display: none;
+    }
 }
 
 .status-indicator {
@@ -464,7 +514,13 @@ mark {
 
 /* 高优先级卡片（需要更多空间） */
 .card.priority-2 {
-    min-height: 200px;
+    min-height: 280px;
+}
+
+/* 系统概览和当前任务卡片 - 给予更多默认高度 */
+.card[data-card-id="system-overview"],
+.card[data-card-id="current-tasks"] {
+    min-height: 260px;
 }
 
 .card::before {
@@ -664,6 +720,7 @@ mark {
     border-radius: 12px;
     font-size: 0.75em;
     font-weight: 600;
+    margin-right: 12px;
 }
 
 .badge-green { 
@@ -1680,6 +1737,10 @@ mark {
     flex-direction: column;
 }
 
+.notification-panel.hidden {
+    display: none !important;
+}
+
 .notification-header {
     display: flex;
     justify-content: space-between;
@@ -1768,9 +1829,14 @@ mark {
 
 .notification-footer {
     display: flex;
-    gap: 10px;
+    gap: 8px;
+    flex-wrap: wrap;
     padding: 15px 20px;
     border-top: 1px solid var(--border-color);
+}
+
+.notification-panel {
+    z-index: 1200;
 }
 
 /* ========== UI增强功能样式 ========== */
@@ -1887,4 +1953,313 @@ mark {
 
 .card-header {
     cursor: move;
+}
+
+/* ===== 自适应排版优化（不改视觉风格） ===== */
+/* 让主内容区跟随剩余空间，不再用固定 calc 宽度，避免中等分辨率下卡片内容被挤压/截断 */
+.main-content-area {
+    width: auto;
+    flex: 1 1 auto;
+}
+
+/* 网格以最小卡片宽度自适应，优先保证内容完整显示 */
+.grid {
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+/* card-wide 在大屏占两列；中小屏自动回落为一列 */
+.card.card-wide {
+    grid-column: span 2;
+}
+
+/* 超宽屏：主区仍可 4 列 */
+@media (min-width: 1800px) {
+    .grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+}
+
+/* 常见桌面屏（侧边栏存在）：最多 3 列 */
+@media (min-width: 1366px) and (max-width: 1799px) {
+    .grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+/* 笔记本/中等屏：降到 2 列，避免元素挤没 */
+@media (min-width: 1024px) and (max-width: 1365px) {
+    .grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .card.card-wide,
+    .card.priority-2 {
+        grid-column: span 2 !important;
+    }
+
+    .card-actions .search-input {
+        min-width: 120px;
+    }
+}
+
+/* 平板及以下：统一单列，确保完整可见 */
+@media (max-width: 1023px) {
+    .grid {
+        grid-template-columns: 1fr;
+    }
+
+    .card.card-wide,
+    .card.priority-2,
+    .card.full-width {
+        grid-column: 1 / -1 !important;
+    }
+}
+
+/* 小屏头部改为上下流式，避免工具栏挤掉 */
+@media (max-width: 900px) {
+    .header {
+        grid-template-columns: 1fr;
+        gap: 12px;
+    }
+
+    .header-right {
+        justify-content: flex-start;
+        width: 100%;
+    }
+
+    .global-search-container {
+        flex: 1 1 240px;
+        min-width: 0;
+    }
+
+    .global-search-input,
+    .global-search-input:focus {
+        width: 100%;
+    }
+}
+
+/* 防止卡片头部控件横向溢出导致“看起来缺元素” */
+.card-header,
+.card-actions {
+    min-width: 0;
+}
+
+.card-actions > * {
+    max-width: 100%;
+}
+
+/* 系统概览/模型配额：保证内容完整显示（不改风格，仅排版） */
+.card[data-card-id="system-overview"] .card-content,
+.card[data-card-id="models-quota"] .card-content {
+    min-width: 0;
+    overflow-x: hidden;
+    overflow-y: visible;
+}
+
+.card[data-card-id="models-quota"] {
+    min-height: 260px;
+}
+
+@media (max-width: 1365px) {
+    .card[data-card-id="models-quota"] .card-content {
+        overflow-x: auto;
+    }
+}
+
+/* ===== 手机版监控可读性增强 ===== */
+@media (max-width: 1024px) {
+    .header {
+        position: sticky;
+        top: 0;
+        z-index: 40;
+        margin-bottom: 14px;
+        padding: 12px 14px;
+    }
+
+    .header-left h1 {
+        font-size: 1.35em;
+        line-height: 1.25;
+    }
+
+    .subtitle {
+        font-size: 0.82em;
+    }
+
+    .card {
+        padding: 14px;
+    }
+
+    .card-header {
+        gap: 8px;
+        margin-bottom: 12px;
+        padding-bottom: 10px;
+        cursor: default;
+    }
+
+    .card-actions {
+        width: 100%;
+        gap: 6px;
+    }
+
+    .card-actions .search-input,
+    .card-actions .btn-small,
+    .card-actions select {
+        min-height: 34px;
+    }
+
+    #realtimeLogsCard .card-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    #realtimeLogsCard .log-container {
+        max-height: 48vh;
+    }
+
+    .notification-panel {
+        top: 68px;
+        width: calc(100% - 24px);
+        left: 12px;
+        right: 12px;
+        max-height: calc(100vh - 96px);
+    }
+
+    .agent-card > div:first-child {
+        flex-wrap: wrap;
+        align-items: flex-start !important;
+        gap: 10px !important;
+    }
+
+    .agent-card > div:first-child > div:last-child {
+        width: 100%;
+        display: grid !important;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        align-items: stretch !important;
+    }
+
+    .agent-subagent-list {
+        display: grid !important;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    }
+
+    .agent-subagent-card {
+        width: auto !important;
+        min-width: 0 !important;
+    }
+
+    .mu-summary-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+
+    .mu-token-main-grid,
+    .mu-middle-grid,
+    .mu-trend-grid,
+    .mu-agent-insights-grid,
+    .mu-efficiency-grid {
+        grid-template-columns: 1fr !important;
+    }
+
+    .mu-token-bar-row,
+    .mu-rank-row,
+    .mu-agent-rank-row,
+    .mu-agent-combat-row,
+    .mu-timeline-row {
+        grid-template-columns: 1fr !important;
+        gap: 6px !important;
+        padding: 8px;
+        background: rgba(59, 130, 246, 0.03);
+        border: 1px solid rgba(59, 130, 246, 0.1);
+        border-radius: 8px;
+        margin-bottom: 8px !important;
+    }
+
+    .mu-token-bar-row > :last-child,
+    .mu-rank-row > :last-child,
+    .mu-agent-rank-row > :last-child,
+    .mu-agent-combat-row > :last-child,
+    .mu-timeline-row > :last-child {
+        text-align: left !important;
+    }
+
+    .mu-week-heat-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    }
+}
+
+@media (max-width: 768px) {
+    .container {
+        padding: 0 6px;
+    }
+
+    .card {
+        border-radius: 10px;
+    }
+
+    #realtimeLogsCard .card-actions {
+        grid-template-columns: 1fr;
+    }
+
+    .mu-summary-grid {
+        grid-template-columns: 1fr !important;
+    }
+
+    .mu-week-heat-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+
+    .token-dimension-toggle {
+        width: 100%;
+        justify-content: space-between;
+    }
+
+    .token-dimension-toggle .dim-btn {
+        flex: 1;
+        text-align: center;
+    }
+}
+
+@media (max-width: 480px) {
+    body {
+        padding: 8px;
+        padding-bottom: calc(86px + env(safe-area-inset-bottom, 0px));
+    }
+
+    .mobile-monitor-nav {
+        margin-bottom: 10px;
+        padding-bottom: 8px;
+    }
+
+    .mobile-monitor-nav-btn {
+        font-size: 0.76em;
+        padding: 6px 10px;
+    }
+
+    .agent-card > div:first-child > div:last-child {
+        grid-template-columns: 1fr;
+    }
+
+    .agent-subagent-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        gap: 8px !important;
+    }
+
+    .agent-subagent-card {
+        padding: 10px !important;
+    }
+}
+
+@media (max-width: 360px) {
+    .mobile-monitor-nav-btn {
+        font-size: 0.72em;
+        padding: 6px 8px;
+    }
+
+    .header-left h1 {
+        font-size: 1.15em;
+    }
+
+    .agent-subagent-list {
+        grid-template-columns: 1fr !important;
+    }
 }

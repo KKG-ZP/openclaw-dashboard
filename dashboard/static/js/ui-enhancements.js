@@ -21,6 +21,7 @@ class UIEnhancements {
     this.setupDragAndDrop();
     this.setupAnimations();
     this.setupRightSidebarToggle();
+    this.setupMobileMonitorNav();
   }
 
   // ========== 主题切换 ==========
@@ -207,10 +208,23 @@ class UIEnhancements {
     this._initMasonry(grid);
 
     // 绑定拖拽到每张卡片的 header
+    this._bindDragEvents(grid);
+  }
+
+  _bindDragEvents(grid) {
+    if (!grid) grid = document.querySelector('.grid');
+    if (!grid) return;
+    
     grid.querySelectorAll(':scope > .card[data-card-id]').forEach(card => {
       const header = card.querySelector('.card-header');
       if (!header) return;
-      header.addEventListener('mousedown', (e) => this._onMouseDown(e, card, grid));
+      // 移除旧的事件监听器（如果有）
+      header.removeEventListener('mousedown', this._boundMouseDown);
+      // 绑定新的事件监听器
+      const boundHandler = (e) => this._onMouseDown(e, card, grid);
+      header.addEventListener('mousedown', boundHandler);
+      // 保存引用以便后续移除
+      header._dragHandler = boundHandler;
     });
   }
 
@@ -243,6 +257,7 @@ class UIEnhancements {
       /* --- 拖拽手柄 --- */
       .grid > .card > .card-header { cursor: grab; user-select: none; }
       .grid > .card > .card-header:active { cursor: grabbing; }
+      .grid.masonry-disabled > .card > .card-header { cursor: default; user-select: auto; }
 
       /* --- 浮动卡片 --- */
       .card.drag-floating {
@@ -379,6 +394,14 @@ class UIEnhancements {
     const grid = document.querySelector('.grid');
     if (!grid || !this._masonryEnabled) return;
 
+    // 平板/手机关闭瀑布流，回退到自然流式布局，避免移动端监控信息错位
+    if (window.matchMedia('(max-width: 1024px)').matches) {
+      this._disableMasonryLayout(grid);
+      return;
+    }
+
+    this._enableMasonryLayout(grid);
+
     const containerWidth = grid.clientWidth;
     if (containerWidth <= 0) return;
 
@@ -393,6 +416,11 @@ class UIEnhancements {
     const items = Array.from(grid.querySelectorAll(
       ':scope > .card[data-card-id]:not(.drag-floating), :scope > .drag-placeholder'
     ));
+    
+    // 强制所有卡片重新计算高度（清除可能的缓存问题）
+    items.forEach(item => {
+      item.style.height = 'auto'; // 清除之前可能的高度限制
+    });
 
     items.forEach(item => {
       const isWide = item.classList.contains('card-wide') || item.classList.contains('drag-placeholder-wide');
@@ -429,6 +457,29 @@ class UIEnhancements {
     grid.style.height = Math.max(...colHeights, 0) + 'px';
   }
 
+  _disableMasonryLayout(grid) {
+    grid.classList.remove('masonry-active', 'masonry-no-transition', 'is-dragging');
+    grid.classList.add('masonry-disabled');
+    grid.style.height = '';
+
+    // 清理瀑布流留下的定位样式，恢复文档流
+    grid.querySelectorAll(':scope > .card[data-card-id], :scope > .drag-placeholder').forEach(item => {
+      item.classList.remove('drag-floating');
+      item.style.position = '';
+      item.style.left = '';
+      item.style.top = '';
+      item.style.width = '';
+      item.style.height = '';
+    });
+  }
+
+  _enableMasonryLayout(grid) {
+    grid.classList.remove('masonry-disabled');
+    if (!grid.classList.contains('masonry-active')) {
+      grid.classList.add('masonry-active');
+    }
+  }
+
   _debounce(fn, ms) {
     let timer;
     return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn.apply(this, args), ms); };
@@ -438,6 +489,7 @@ class UIEnhancements {
 
   _onMouseDown(e, card, grid) {
     if (e.button !== 0) return;
+    if (window.matchMedia('(max-width: 1024px)').matches) return;
     if (e.target.closest('input, select, button, textarea, a, .search-input, .btn-small')) return;
     e.preventDefault();
 
@@ -613,33 +665,101 @@ class UIEnhancements {
     const overlay = document.getElementById('rightSidebarOverlay');
     
     if (toggle && sidebar) {
+      const openSidebar = () => {
+        sidebar.classList.remove('collapsed');
+        if (overlay && window.matchMedia('(max-width: 640px)').matches) {
+          overlay.classList.add('show');
+        }
+        toggle.textContent = '✕';
+        toggle.title = '隐藏侧边栏';
+      };
+
+      const closeSidebar = () => {
+        sidebar.classList.add('collapsed');
+        if (overlay) overlay.classList.remove('show');
+        toggle.textContent = '⚙️';
+        toggle.title = '显示侧边栏';
+      };
+
+      const syncByViewport = () => {
+        if (window.matchMedia('(max-width: 640px)').matches) {
+          closeSidebar();
+        } else {
+          sidebar.classList.remove('collapsed');
+          if (overlay) overlay.classList.remove('show');
+          toggle.textContent = '⚙️';
+          toggle.title = '显示/隐藏侧边栏';
+        }
+      };
+
       toggle.addEventListener('click', (e) => {
         e.stopPropagation();
         const isCollapsed = sidebar.classList.contains('collapsed');
-        
         if (isCollapsed) {
-          sidebar.classList.remove('collapsed');
-          if (overlay) overlay.classList.add('show');
-          toggle.textContent = '✕';
-          toggle.title = '隐藏侧边栏';
+          openSidebar();
         } else {
-          sidebar.classList.add('collapsed');
-          if (overlay) overlay.classList.remove('show');
-          toggle.textContent = '⚙️';
-          toggle.title = '显示侧边栏';
+          closeSidebar();
         }
       });
       
       // 点击遮罩关闭侧边栏
       if (overlay) {
         overlay.addEventListener('click', () => {
-          sidebar.classList.add('collapsed');
-          overlay.classList.remove('show');
-          toggle.textContent = '⚙️';
-          toggle.title = '显示侧边栏';
+          closeSidebar();
         });
       }
+
+      syncByViewport();
+      window.addEventListener('resize', this._debounce(syncByViewport, 120));
     }
+  }
+
+  // ========== 移动端监控导航 ==========
+  setupMobileMonitorNav() {
+    const nav = document.getElementById('mobileMonitorNav');
+    if (!nav) return;
+
+    const buttons = Array.from(nav.querySelectorAll('.mobile-monitor-nav-btn'));
+    if (buttons.length === 0) return;
+
+    const setActive = (targetId) => {
+      buttons.forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.target === targetId);
+      });
+    };
+
+    buttons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const targetId = btn.dataset.target;
+        if (!targetId) return;
+
+        let target = document.querySelector(`.card[data-card-id="${targetId}"]`) || document.getElementById(targetId);
+        if (!target) return;
+
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        setActive(targetId);
+      });
+    });
+
+    const observerTargets = buttons
+      .map(btn => document.querySelector(`.card[data-card-id="${btn.dataset.target}"]`) || document.getElementById(btn.dataset.target))
+      .filter(Boolean);
+
+    if (observerTargets.length > 0 && 'IntersectionObserver' in window) {
+      const observer = new IntersectionObserver((entries) => {
+        const visible = entries
+          .filter(entry => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+        if (visible[0]) {
+          const targetId = visible[0].target.dataset.cardId || visible[0].target.id;
+          if (targetId) setActive(targetId);
+        }
+      }, { threshold: [0.35, 0.6] });
+
+      observerTargets.forEach(el => observer.observe(el));
+    }
+
+    setActive(buttons[0].dataset.target);
   }
 
   // ========== 动画增强 ==========

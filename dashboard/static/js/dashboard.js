@@ -17,7 +17,8 @@ class Dashboard {
   // 设置WebSocket连接
   setupWebSocket() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}`;
+    const wsPath = window.location.pathname.startsWith('/toolbox/dashboard') ? '/toolbox/dashboard/ws' : '/ws';
+    const wsUrl = `${protocol}//${window.location.host}${wsPath}`;
     
     try {
       this.ws = new WebSocket(wsUrl);
@@ -213,7 +214,7 @@ class Dashboard {
       if (data.models && data.models.length > 0) {
         console.log('[前端] 模型配额详情:');
         data.models.forEach(m => {
-          console.log(`  ${m.provider} - ${m.name}: quotaUsed=${m.quotaUsed} (${typeof m.quotaUsed}), quotaTotal=${m.quotaTotal} (${typeof m.quotaTotal})`);
+          console.log(`  ${m.provider} - ${m.modelName || m.modelId || m.name || '未知模型'}: quotaUsed=${m.quotaUsed} (${typeof m.quotaUsed}), quotaTotal=${m.quotaTotal} (${typeof m.quotaTotal})`);
         });
       }
       
@@ -316,6 +317,12 @@ class Dashboard {
     }
 
     // 面板内容更新后，多次触发布局确保能测到正确高度（避免 reflow 未完成或时序问题）
+    // 清理旧的延迟任务，避免重排风暴
+    if (this._layoutTimeouts) {
+      this._layoutTimeouts.forEach(id => clearTimeout(id));
+    }
+    this._layoutTimeouts = [];
+
     const runLayout = () => {
       if (window.uiEnhancements && window.uiEnhancements.layoutMasonry) {
         window.uiEnhancements.layoutMasonry();
@@ -329,9 +336,16 @@ class Dashboard {
     runLayout();
     // 2. 下一帧再排一次（布局/绘制可能延迟一帧）
     requestAnimationFrame(runLayout);
-    // 3. 短延迟兜底（字体、图片等可能稍晚影响高度）
-    setTimeout(runLayout, 100);
-    setTimeout(runLayout, 400);
+    // 3. 延迟兜底（图表动画/字体/图片延迟会影响卡片高度）
+    [100, 400, 900, 1600, 3000].forEach(ms => {
+      const id = setTimeout(runLayout, ms);
+      this._layoutTimeouts.push(id);
+    });
+    
+    // 4. 确保拖动功能正常（重新绑定事件）
+    if (window.uiEnhancements && window.uiEnhancements._bindDragEvents) {
+      setTimeout(() => window.uiEnhancements._bindDragEvents(grid), 100);
+    }
   }
 
   // 更新资源监控面板（侧边栏布局）
@@ -603,7 +617,12 @@ class Dashboard {
     const memoryStr = system.gateway.memory || '0 KB';
     const memoryKB = parseFloat(memoryStr.replace(/[^\d.]/g, '')) || 0;
     const memoryMB = memoryStr.includes('KB') ? memoryKB / 1024 : memoryKB;
-    const memoryPercent = Math.min(100, (memoryMB / 512) * 100); // 假设 512MB 为 100%
+    
+    // 获取系统总内存（从 system 对象中获取，如果有的话）
+    // 如果没有，尝试从 API 返回数据中获取，或使用默认值
+    const rawTotalMemory = Number(system.totalMemory);
+    const totalMemoryMB = (rawTotalMemory > 0 && !isNaN(rawTotalMemory)) ? rawTotalMemory : 2048; // 默认2GB
+    const memoryPercent = Math.min(100, Math.max(0, (memoryMB / totalMemoryMB) * 100));
     
     // 根据使用率确定颜色
     const getCpuColor = (val) => val > 80 ? '#ef4444' : val > 50 ? '#f59e0b' : '#3b82f6';
@@ -612,7 +631,7 @@ class Dashboard {
     const memColor = getMemColor(memoryPercent);
     
     const html = `
-      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px;">
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin-bottom: 16px;">
         <div style="background: ${isRunning ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)'}; padding: 14px; border-radius: 10px; text-align: center; border: 1px solid ${isRunning ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)'};">
           <div style="font-size: 1.8em; margin-bottom: 6px;">${isRunning ? '✅' : '❌'}</div>
           <div style="font-size: 0.75em; color: var(--text-secondary);">Gateway</div>
@@ -644,43 +663,43 @@ class Dashboard {
                 stroke-linecap="round"
                 style="transition: stroke-dashoffset 0.5s ease, stroke 0.3s ease;"/>
             </svg>
-            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 0.7em; font-weight: 700; color: ${memColor};">
+            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 0.7em; font-weight: 700; color: ${memColor};" title="${memoryPercent.toFixed(1)}% (${memoryMB.toFixed(0)}MB / ${totalMemoryMB}MB)">
               ${memoryMB.toFixed(0)}MB
             </div>
           </div>
-          <div style="font-size: 0.75em; color: var(--text-secondary);">内存占用</div>
+          <div style="font-size: 0.75em; color: var(--text-secondary);" title="${memoryPercent.toFixed(1)}% 占用">内存占用</div>
         </div>
       </div>
-      <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; font-size: 0.85em;">
-        <div style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg-secondary); border-radius: 8px;">
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 6px; font-size: 0.85em;">
+        <div style="display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: var(--bg-secondary); border-radius: 8px; min-width: 0;">
           <span style="font-size: 1.1em;">🏠</span>
           <span style="color: var(--text-secondary);">主机</span>
-          <span style="margin-left: auto; font-weight: 500;">${system.hostname}</span>
+          <span title="${system.hostname}" style="margin-left: auto; font-weight: 500; min-width: 0; max-width: 62%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${system.hostname}</span>
         </div>
-        <div style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg-secondary); border-radius: 8px;">
+        <div style="display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: var(--bg-secondary); border-radius: 8px;">
           <span style="font-size: 1.1em;">🔢</span>
           <span style="color: var(--text-secondary);">PID</span>
           <span style="margin-left: auto; font-weight: 500;">${system.gateway.pid || 'N/A'}</span>
         </div>
-        <div style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg-secondary); border-radius: 8px;">
+        <div style="display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: var(--bg-secondary); border-radius: 8px;">
           <span style="font-size: 1.1em;">⏱️</span>
           <span style="color: var(--text-secondary);">运行时间</span>
           <span style="margin-left: auto; font-weight: 500;">${system.gateway.uptime || 'N/A'}</span>
         </div>
-        <div style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg-secondary); border-radius: 8px;">
+        <div style="display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: var(--bg-secondary); border-radius: 8px;">
           <span style="font-size: 1.1em;">🌐</span>
           <span style="color: var(--text-secondary);">端口</span>
           <span style="margin-left: auto; font-weight: 500;">${system.gateway.port || 'N/A'}</span>
         </div>
-        <div style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg-secondary); border-radius: 8px;">
+        <div style="display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: var(--bg-secondary); border-radius: 8px;">
           <span style="font-size: 1.1em;">📦</span>
           <span style="color: var(--text-secondary);">Node.js</span>
           <span style="margin-left: auto; font-weight: 500;">${system.nodeVersion}</span>
         </div>
-        <div style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg-secondary); border-radius: 8px;">
+        <div style="display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: var(--bg-secondary); border-radius: 8px; min-width: 0;">
           <span style="font-size: 1.1em;">🖥️</span>
           <span style="color: var(--text-secondary);">架构</span>
-          <span style="margin-left: auto; font-weight: 500;">${system.platform} ${system.arch}</span>
+          <span title="${system.platform} ${system.arch}" style="margin-left: auto; font-weight: 500; min-width: 0; max-width: 62%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${system.platform} ${system.arch}</span>
         </div>
       </div>
     `;
@@ -752,7 +771,7 @@ class Dashboard {
     // 生成组织架构 HTML
     const html = `
       <!-- 统计概览 -->
-      <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px;">
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin-bottom: 20px;">
         <div style="background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(99, 102, 241, 0.1)); padding: 16px; border-radius: 12px; text-align: center;">
           <div style="font-size: 2em; font-weight: 700; color: #3b82f6;">${agents.length}</div>
           <div style="font-size: 0.85em; color: var(--text-secondary);">Agent 总数</div>
@@ -803,7 +822,7 @@ class Dashboard {
             const subBg = subActive ? 'rgba(16, 185, 129, 0.08)' : 'rgba(245, 158, 11, 0.08)';
             const subBorder = subActive ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)';
             return `
-              <div class="clickable" onclick="event.stopPropagation(); window.showAgentDetail('${subAgent.id}')" style="
+              <div class="clickable agent-subagent-card" onclick="event.stopPropagation(); window.showAgentDetail('${subAgent.id}')" style="
                 width: 120px; padding: 12px; text-align: center;
                 background: ${subBg}; border-radius: 12px; cursor: pointer;
                 border: 1px solid ${subBorder}; transition: all 0.2s;
@@ -822,7 +841,7 @@ class Dashboard {
             `;
           } else {
             return `
-              <div style="width: 120px; padding: 12px; text-align: center; background: rgba(100,100,100,0.05); border: 1px dashed var(--border); border-radius: 12px;">
+              <div class="agent-subagent-card" style="width: 120px; padding: 12px; text-align: center; background: rgba(100,100,100,0.05); border: 1px dashed var(--border); border-radius: 12px;">
                 <div style="font-size: 2em; margin-bottom: 8px;">🔗</div>
                 <div style="font-size: 0.85em; color: var(--text-secondary); margin-bottom: 2px;">${subId}</div>
                 <div style="font-size: 0.7em; color: var(--text-muted);">未配置</div>
@@ -836,7 +855,7 @@ class Dashboard {
             <div style="font-size: 0.8em; color: var(--text-secondary); margin-bottom: 10px; font-weight: 500;">
               <span style="margin-right: 4px;">👥</span> 子 Agent (${agent.subagents.length})
             </div>
-            <div style="display: flex; flex-wrap: wrap; gap: 12px;">
+            <div class="agent-subagent-list" style="display: flex; flex-wrap: wrap; gap: 12px;">
               ${subagentItems}
             </div>
           </div>
@@ -1095,7 +1114,7 @@ class Dashboard {
       console.log(`[前端] 提供商 ${group.provider} 配额检查: totalNum=${totalNum}, usedNum=${usedNum}, remaining=${remaining}`);
 
       // 列出该提供商下的所有模型
-      const modelsList = group.models.map(m => m.name).join('、');
+      const modelsList = group.models.map(m => m.name || m.modelName || m.modelId || m.model || '未知模型').join('、');
       const maxContextWindow = Math.max(...group.models.map(m => m.contextWindow || 0));
       
       // 生成余额显示 HTML
@@ -1174,8 +1193,24 @@ class Dashboard {
           </div>
         `;
       } else {
-        // 余额未配置时不显示该提供商
-        return '';
+        // 余额未配置时仍显示提供商和模型列表（不显示配额部分）
+        return `
+      <div class="status-item">
+        <span class="status-label">${group.provider}</span>
+        <span class="badge badge-green">正常</span>
+      </div>
+      <div style="font-size: 0.85em; color: var(--text-secondary); margin-left: 10px; margin-bottom: 15px; line-height: 1.5; min-width: 0;">
+        <div style="margin-bottom: 5px; word-break: break-word; overflow-wrap: anywhere;">
+          <strong>模型:</strong> ${modelsList}
+        </div>
+        <div style="margin-bottom: 5px;">
+          最大上下文窗口: ${maxContextWindow.toLocaleString()}
+        </div>
+        <div style="font-size: 0.75em; color: var(--text-muted); padding: 8px; background: rgba(0,0,0,0.03); border-radius: 6px; margin-top: 8px;">
+          💡 配额信息暂不可用
+        </div>
+      </div>
+    `;
       }
       
       return `
@@ -1183,8 +1218,8 @@ class Dashboard {
         <span class="status-label">${group.provider}</span>
         <span class="badge badge-green">正常</span>
       </div>
-      <div style="font-size: 0.85em; color: var(--text-secondary); margin-left: 10px; margin-bottom: 15px;">
-        <div style="margin-bottom: 5px;">
+      <div style="font-size: 0.85em; color: var(--text-secondary); margin-left: 10px; margin-bottom: 15px; line-height: 1.5; min-width: 0;">
+        <div style="margin-bottom: 5px; word-break: break-word; overflow-wrap: anywhere;">
           <strong>模型:</strong> ${modelsList}
         </div>
         <div style="margin-bottom: 5px;">
@@ -1235,7 +1270,9 @@ class Dashboard {
 
     // 获取时间范围选择器
     const rangeSelect = document.getElementById('modelUsageRange');
-    const days = rangeSelect ? parseInt(rangeSelect.value) || 30 : 30;
+    const selectedValue = rangeSelect ? rangeSelect.value : '';
+    // 空字符串表示全历史，传递给后端时不带 days 参数（或 days=null）
+    const daysParam = selectedValue ? `days=${selectedValue}` : '';
 
     // 绑定时间范围切换事件（只绑定一次）
     if (rangeSelect && !rangeSelect._bound) {
@@ -1243,8 +1280,14 @@ class Dashboard {
       rangeSelect.addEventListener('change', () => this.updateModelUsageStats());
     }
 
+    // 获取当前选中的 Token 维度（默认总量）
+    if (!this.modelTokenDimension) {
+      this.modelTokenDimension = 'total';
+    }
+    const tokenDimension = this.modelTokenDimension;
+
     try {
-      const response = await fetch(`/api/models/usage?days=${days}`);
+      const response = await fetch(`/api/models/usage?${daysParam}`);
       if (!response.ok) throw new Error(`HTTP错误: ${response.status}`);
       const data = await response.json();
 
@@ -1254,6 +1297,30 @@ class Dashboard {
       }
 
       const s = data.summary;
+      const topModel = data.byModel && data.byModel.length > 0 ? data.byModel[0] : null;
+      const topAgent = data.byAgent && data.byAgent.length > 0 ? data.byAgent[0] : null;
+      const avgDailyCalls = data.byDay && data.byDay.length > 0
+        ? Math.round(data.byDay.reduce((sum, d) => sum + (d.total || 0), 0) / data.byDay.length)
+        : 0;
+
+      // Token 消耗速度（tok/h）与趋势
+      const recentDaysForSpeed = (data.byDay || []).slice(-3);
+      const prevDaysForSpeed = (data.byDay || []).slice(-6, -3);
+      const recentTotalTokens = recentDaysForSpeed.reduce((sum, d) => sum + (d.totalTokens || 0), 0);
+      const prevTotalTokens = prevDaysForSpeed.reduce((sum, d) => sum + (d.totalTokens || 0), 0);
+      const recentTokPerHour = recentDaysForSpeed.length > 0
+        ? Math.round(recentTotalTokens / (recentDaysForSpeed.length * 24))
+        : 0;
+      const prevTokPerHour = prevDaysForSpeed.length > 0
+        ? Math.round(prevTotalTokens / (prevDaysForSpeed.length * 24))
+        : 0;
+      let speedTrend = 'stable';
+      if (prevTokPerHour > 0) {
+        if (recentTokPerHour > prevTokPerHour * 1.15) speedTrend = 'up';
+        else if (recentTokPerHour < prevTokPerHour * 0.85) speedTrend = 'down';
+      }
+      const speedTrendIcon = speedTrend === 'up' ? '📈' : speedTrend === 'down' ? '📉' : '➡️';
+      const speedTrendColor = speedTrend === 'up' ? '#ef4444' : speedTrend === 'down' ? '#10b981' : '#64748b';
 
       // 颜色调色板
       const colors = [
@@ -1262,35 +1329,190 @@ class Dashboard {
       ];
 
       // === 顶部概览条 ===
+      const totalTokens = (data.summary?.totalTokens) || (data.byModel || []).reduce((sum,m)=>sum+(m.tokens||0),0);
+      const tokenDisplay = totalTokens >= 1000000 ? 
+        `${(totalTokens / 1000000).toFixed(1)}M` : 
+        totalTokens >= 1000 ? `${(totalTokens / 1000).toFixed(1)}K` : totalTokens;
+      
+      const dateMatch = (s.dateRange || '').match(/(\d{4}-\d{2}-\d{2})\s*~\s*(\d{4}-\d{2}-\d{2})/);
+      const rangeStart = dateMatch ? dateMatch[1] : '';
+      const rangeEnd = dateMatch ? dateMatch[2] : '';
+      const rangeDays = dateMatch
+        ? Math.max(1, Math.round((new Date(rangeEnd) - new Date(rangeStart)) / 86400000) + 1)
+        : (data.byDay || []).length;
+
+      const metricCardStyle = 'padding:14px; border-radius:10px; text-align:center; min-height:132px; display:flex; flex-direction:column; align-items:center;';
+      const metricValueWrap = 'min-height:62px; display:flex; align-items:center; justify-content:center; width:100%;';
+      const metricLabelStyle = 'font-size:0.8em; color:var(--text-secondary); margin-top:auto; line-height:1.2;';
+
       const summaryHtml = `
-        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px;">
-          <div style="background: rgba(59, 130, 246, 0.08); padding: 14px; border-radius: 10px; text-align: center; border: 1px solid rgba(59, 130, 246, 0.2);">
-            <div style="font-size: 1.6em; font-weight: 700; color: #3b82f6;">${s.totalCalls.toLocaleString()}</div>
-            <div style="font-size: 0.8em; color: var(--text-secondary); margin-top: 4px;">总调用次数</div>
+        <div class="mu-summary-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px;">
+          <div style="${metricCardStyle} background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.2);">
+            <div style="${metricValueWrap}"><div style="font-size: 2.25em; font-weight: 700; color: #3b82f6; line-height:1;">${s.totalCalls.toLocaleString()}</div></div>
+            <div style="${metricLabelStyle}">总调用次数</div>
           </div>
-          <div style="background: rgba(16, 185, 129, 0.08); padding: 14px; border-radius: 10px; text-align: center; border: 1px solid rgba(16, 185, 129, 0.2);">
-            <div style="font-size: 1.6em; font-weight: 700; color: #10b981;">${s.totalModels}</div>
-            <div style="font-size: 0.8em; color: var(--text-secondary); margin-top: 4px;">活跃模型</div>
+          <div style="${metricCardStyle} background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.2);">
+            <div style="${metricValueWrap}"><div style="font-size: 2.25em; font-weight: 700; color: #10b981; line-height:1;">${tokenDisplay}</div></div>
+            <div style="${metricLabelStyle}">总Token使用量</div>
           </div>
-          <div style="background: rgba(139, 92, 246, 0.08); padding: 14px; border-radius: 10px; text-align: center; border: 1px solid rgba(139, 92, 246, 0.2);">
-            <div style="font-size: 1.6em; font-weight: 700; color: #8b5cf6;">${s.totalAgents}</div>
-            <div style="font-size: 0.8em; color: var(--text-secondary); margin-top: 4px;">活跃 Agent</div>
+          <div style="${metricCardStyle} background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.2);">
+            <div style="${metricValueWrap}"><div style="font-size: 2.25em; font-weight: 700; color: #8b5cf6; line-height:1;">${s.totalModels}</div></div>
+            <div style="${metricLabelStyle}">活跃模型</div>
           </div>
-          <div style="background: rgba(245, 158, 11, 0.08); padding: 14px; border-radius: 10px; text-align: center; border: 1px solid rgba(245, 158, 11, 0.2);">
-            <div style="font-size: 1em; font-weight: 600; color: #f59e0b; margin-top: 4px;">${s.dateRange}</div>
-            <div style="font-size: 0.8em; color: var(--text-secondary); margin-top: 4px;">统计范围</div>
+          <div style="${metricCardStyle} background: linear-gradient(135deg, rgba(236, 72, 153, 0.08), rgba(168, 85, 247, 0.08)); border: 1px solid rgba(168, 85, 247, 0.2);">
+            <div style="${metricValueWrap}"><div style="font-size: 2.05em; font-weight: 700; color: #a855f7; line-height:1;">${recentTokPerHour >= 1000 ? `${(recentTokPerHour / 1000).toFixed(1)}K` : recentTokPerHour}</div></div>
+            <div style="${metricLabelStyle}">消耗速度(tokens/h)</div>
+          </div>
+          <div style="${metricCardStyle} background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.2);">
+            <div style="${metricValueWrap}"><div style="font-size: 1.55em; font-weight: 700; color: #f59e0b; line-height:1.15;">覆盖 ${rangeDays} 天</div></div>
+            <div style="${metricLabelStyle}">${rangeStart && rangeEnd ? `${rangeStart} → ${rangeEnd}` : (s.dateRange || '统计窗口')}</div>
+          </div>
+        </div>
+      `;
+
+      const formatTokens = (v) => {
+        const n = Number(v) || 0;
+        if (n >= 1000000000) return `${(n / 1000000000).toFixed(1)}B`;
+        if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
+        if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
+        return `${n}`;
+      };
+
+      // 根据选中的维度获取 token 值
+      const getTokenValue = (m) => {
+        if (tokenDimension === 'input') return m.inputTokens || 0;
+        if (tokenDimension === 'output') return m.outputTokens || 0;
+        return m.tokens || 0; // total
+      };
+
+      // 过滤掉0 token的模型（delivery-mirror, gateway-injected等）
+      const validModels = (data.byModel || []).filter(m => (m.tokens || 0) > 0);
+
+      const modelTokenRank = [...validModels].sort((a, b) => getTokenValue(b) - getTokenValue(a));
+      const maxModelTokens = modelTokenRank.length > 0 ? getTokenValue(modelTokenRank[0]) || 1 : 1;
+      const totalInputTokens = validModels.reduce((sum, m) => sum + (m.inputTokens || 0), 0);
+      const totalOutputTokens = validModels.reduce((sum, m) => sum + (m.outputTokens || 0), 0);
+      const ioTotal = totalInputTokens + totalOutputTokens;
+      const inputPct = ioTotal > 0 ? ((totalInputTokens / ioTotal) * 100).toFixed(1) : '0.0';
+      const outputPct = ioTotal > 0 ? ((totalOutputTokens / ioTotal) * 100).toFixed(1) : '0.0';
+
+      // 计算当前维度的总 token
+      const getDimensionTotal = () => {
+        if (tokenDimension === 'input') return totalInputTokens;
+        if (tokenDimension === 'output') return totalOutputTokens;
+        return totalTokens;
+      };
+      const dimensionTotal = getDimensionTotal();
+
+      const ioRatioHtml = `
+        <div style="margin-bottom: 16px; padding: 12px; border-radius: 10px; border: 1px solid rgba(59, 130, 246, 0.15); background: rgba(59, 130, 246, 0.03);">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; gap:10px; flex-wrap:wrap;">
+            <div style="font-size:0.9em; color:var(--text-primary); font-weight:600;">🔄 输入/输出 Token 比例</div>
+            <span style="font-size:0.75em; color:var(--text-secondary);">总计 ${formatTokens(totalTokens)} tokens</span>
+          </div>
+          <div style="height: 24px; background: rgba(0,0,0,0.06); border-radius: 12px; overflow: hidden; display:flex; margin-bottom:8px;">
+            <div style="width:${inputPct}%; background:linear-gradient(90deg, #3b82f6, #60a5fa); display:flex; align-items:center; justify-content:center; transition:width .4s;">
+              ${Number(inputPct) > 15 ? `<span style="font-size:0.72em; color:#fff; font-weight:600;">${inputPct}%</span>` : ''}
+            </div>
+            <div style="width:${outputPct}%; background:linear-gradient(90deg, #10b981, #34d399); display:flex; align-items:center; justify-content:center; transition:width .4s;">
+              ${Number(outputPct) > 15 ? `<span style="font-size:0.72em; color:#fff; font-weight:600;">${outputPct}%</span>` : ''}
+            </div>
+          </div>
+          <div style="display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; font-size:0.78em;">
+            <span style="color:#3b82f6;">📥 输入 ${formatTokens(totalInputTokens)} (${inputPct}%)</span>
+            <span style="color:#10b981;">📤 输出 ${formatTokens(totalOutputTokens)} (${outputPct}%)</span>
+            <span style="color:#8b5cf6;">💾 缓存读 ${formatTokens(data.summary?.totalCacheReadTokens || 0)}</span>
+          </div>
+        </div>
+      `;
+
+      // === 各模型 Token 使用量（多元展示，保持主风格） ===
+      const modelTokenBarsHtml = modelTokenRank.slice(0, 8).map((m, i) => {
+        const tokenValue = getTokenValue(m);
+        const tokenPct = maxModelTokens > 0 ? ((tokenValue / maxModelTokens) * 100).toFixed(0) : 0;
+        const color = colors[i % colors.length];
+        const sharePct = dimensionTotal > 0 ? ((tokenValue / dimensionTotal) * 100).toFixed(1) : '0.0';
+        return `
+          <div class="mu-token-bar-row" style="display: grid; grid-template-columns: minmax(120px, 1.2fr) 2.4fr auto; gap: 10px; align-items: center; margin-bottom: 8px;">
+            <div style="font-size: 0.82em; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${m.provider}/${m.modelName}">${m.modelName}</div>
+            <div style="position: relative; background: rgba(0,0,0,0.06); border-radius: 8px; height: 22px; overflow: hidden;">
+              <div style="width: ${tokenPct}%; height: 100%; background: linear-gradient(90deg, ${color}, rgba(255,255,255,0.25)); border-radius: 8px; transition: width 0.5s;"></div>
+              <div style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font-size: 0.72em; color: #fff; font-weight: 600; text-shadow: 0 1px 2px rgba(0,0,0,0.35);">${sharePct}%</div>
+            </div>
+            <div style="font-size: 0.82em; color: var(--text-primary); font-weight: 600; min-width: 72px; text-align: right;">${formatTokens(tokenValue)}</div>
+          </div>
+        `;
+      }).join('');
+
+      const modelTokenCardsHtml = modelTokenRank.slice(0, 6).map((m, i) => {
+        const tokenValue = getTokenValue(m);
+        const color = colors[i % colors.length];
+        const sharePct = dimensionTotal > 0 ? ((tokenValue / dimensionTotal) * 100).toFixed(1) : '0.0';
+        const ioSum = (m.inputTokens || 0) + (m.outputTokens || 0);
+        const mInputPct = ioSum > 0 ? ((m.inputTokens || 0) / ioSum * 100).toFixed(0) : 0;
+        const mOutputPct = ioSum > 0 ? ((m.outputTokens || 0) / ioSum * 100).toFixed(0) : 0;
+        return `
+          <div style="padding: 12px; border-radius: 10px; border: 1px solid rgba(59, 130, 246, 0.18); background: linear-gradient(135deg, rgba(59,130,246,0.04), rgba(139,92,246,0.04));">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px;">
+              <div style="font-size:0.88em; font-weight:600; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${m.provider}/${m.modelName}">${m.modelName}</div>
+              <span style="font-size:0.72em; padding:2px 8px; border-radius:999px; background:${color}22; color:${color}; font-weight:600;">${sharePct}%</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px;">
+              <span style="font-size:1.05em; font-weight:700; color:${color};">${formatTokens(tokenValue)}</span>
+              <span style="font-size:0.75em; color:var(--text-secondary);">${m.count || 0} 次调用</span>
+            </div>
+            <div style="height:8px; background:rgba(0,0,0,0.06); border-radius:999px; overflow:hidden; display:flex;">
+              <div style="width:${mInputPct}%; background:rgba(59,130,246,0.75);"></div>
+              <div style="width:${mOutputPct}%; background:rgba(16,185,129,0.75);"></div>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-top:6px; font-size:0.72em; color:var(--text-secondary);">
+              <span>📥 ${formatTokens(m.inputTokens || 0)}</span>
+              <span>📤 ${formatTokens(m.outputTokens || 0)}</span>
+              ${(m.cacheReadTokens || 0) > 0 ? `<span>💾 ${formatTokens(m.cacheReadTokens)}</span>` : ''}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      const modelTokensHtml = `
+        <div style="margin-bottom: 20px; padding: 14px; border-radius: 12px; border: 1px solid rgba(59, 130, 246, 0.18); background: rgba(59, 130, 246, 0.03);">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:12px;">
+            <h4 style="margin: 0; font-size: 0.95em; color: var(--text-primary);">各模型 Token 使用量</h4>
+            <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+              <!-- Token 维度切换按钮 -->
+              <div class="token-dimension-toggle" style="display:flex; gap:4px; background:rgba(0,0,0,0.08); border-radius:8px; padding:3px;">
+                <button class="dim-btn" data-dimension="total" style="padding:4px 12px; border:none; border-radius:6px; font-size:0.75em; font-weight:600; cursor:pointer; transition:all 0.25s; background:${tokenDimension === 'total' ? 'rgba(59,130,246,0.9)' : 'transparent'}; color:${tokenDimension === 'total' ? '#fff' : 'var(--text-secondary)'}">总量</button>
+                <button class="dim-btn" data-dimension="input" style="padding:4px 12px; border:none; border-radius:6px; font-size:0.75em; font-weight:600; cursor:pointer; transition:all 0.25s; background:${tokenDimension === 'input' ? 'rgba(59,130,246,0.9)' : 'transparent'}; color:${tokenDimension === 'input' ? '#fff' : 'var(--text-secondary)'}">输入</button>
+                <button class="dim-btn" data-dimension="output" style="padding:4px 12px; border:none; border-radius:6px; font-size:0.75em; font-weight:600; cursor:pointer; transition:all 0.25s; background:${tokenDimension === 'output' ? 'rgba(59,130,246,0.9)' : 'transparent'}; color:${tokenDimension === 'output' ? '#fff' : 'var(--text-secondary)'}">输出</button>
+              </div>
+              <span style="font-size:0.78em; color:var(--text-secondary); padding:4px 10px; border-radius:999px; background:rgba(59,130,246,0.1); border:1px solid rgba(59,130,246,0.18);">输入 ${formatTokens(totalInputTokens)} (${inputPct}%)</span>
+              <span style="font-size:0.78em; color:var(--text-secondary); padding:4px 10px; border-radius:999px; background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.18);">输出 ${formatTokens(totalOutputTokens)} (${outputPct}%)</span>
+            </div>
+          </div>
+          ${ioRatioHtml}
+          <div class="mu-token-main-grid" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap:16px;">
+            <div>
+              <div style="font-size:0.82em; color:var(--text-secondary); margin-bottom:8px;">Token 占比条形视图</div>
+              ${modelTokenBarsHtml || '<div class="empty-state">无模型 token 数据</div>'}
+            </div>
+            <div>
+              <div style="font-size:0.82em; color:var(--text-secondary); margin-bottom:8px;">Top 模型 Token 卡片视图</div>
+              <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:10px;">
+                ${modelTokenCardsHtml || '<div class="empty-state">无模型 token 数据</div>'}
+              </div>
+            </div>
           </div>
         </div>
       `;
 
       // === 中间区域：按模型 + 按Agent 并排 ===
-      const maxModelCount = data.byModel.length > 0 ? data.byModel[0].count : 1;
-      const modelBarsHtml = data.byModel.slice(0, 8).map((m, i) => {
+      const maxModelCount = validModels.length > 0 ? validModels[0].count : 1;
+      const modelBarsHtml = validModels.slice(0, 8).map((m, i) => {
         const pct = (m.count / maxModelCount * 100).toFixed(0);
         const color = colors[i % colors.length];
         return `
-          <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-            <div style="width: 120px; font-size: 0.82em; text-align: right; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${m.provider}/${m.modelName}">${m.modelName}</div>
+          <div class="mu-rank-row" style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+            <div class="mu-rank-label" style="width: 120px; font-size: 0.82em; text-align: right; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${m.provider}/${m.modelName}">${m.modelName}</div>
             <div style="flex: 1; background: rgba(0,0,0,0.06); border-radius: 4px; height: 22px; overflow: hidden;">
               <div style="width: ${pct}%; height: 100%; background: ${color}; border-radius: 4px; transition: width 0.5s; display: flex; align-items: center; justify-content: flex-end; padding-right: 6px;">
                 ${pct > 15 ? `<span style="font-size: 0.75em; color: white; font-weight: 600;">${m.count}</span>` : ''}
@@ -1306,8 +1528,8 @@ class Dashboard {
         const pct = (a.total / maxAgentTotal * 100).toFixed(0);
         const color = colors[(i + 3) % colors.length];
         return `
-          <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-            <div style="width: 100px; font-size: 0.82em; text-align: right; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${a.agentName}">${a.agentEmoji || '🤖'} ${a.agentName}</div>
+          <div class="mu-agent-rank-row" style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+            <div class="mu-rank-label" style="width: 100px; font-size: 0.82em; text-align: right; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${a.agentName}">${a.agentEmoji || '🤖'} ${a.agentName}</div>
             <div style="flex: 1; background: rgba(0,0,0,0.06); border-radius: 4px; height: 22px; overflow: hidden;">
               <div style="width: ${pct}%; height: 100%; background: ${color}; border-radius: 4px; transition: width 0.5s; display: flex; align-items: center; justify-content: flex-end; padding-right: 6px;">
                 ${pct > 15 ? `<span style="font-size: 0.75em; color: white; font-weight: 600;">${a.total}</span>` : ''}
@@ -1318,8 +1540,168 @@ class Dashboard {
         `;
       }).join('');
 
+      const top3TokenShare = totalTokens > 0
+        ? (((data.byModel || []).slice(0, 3).reduce((sum, m) => sum + (m.tokens || 0), 0) / totalTokens) * 100).toFixed(1)
+        : '0.0';
+      const concentrationLevel = Number(top3TokenShare) >= 80 ? '高集中' : Number(top3TokenShare) >= 60 ? '中集中' : '分散';
+      const concentrationColor = Number(top3TokenShare) >= 80 ? '#ef4444' : Number(top3TokenShare) >= 60 ? '#f59e0b' : '#10b981';
+
+      const insightsHtml = `
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px;">
+          <div style="padding: 12px; border-radius: 10px; background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.2);">
+            <div style="font-size: 0.8em; color: var(--text-secondary);">高频模型</div>
+            <div style="font-size: 0.95em; color: var(--text-primary); font-weight: 600; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${topModel ? `${topModel.provider}/${topModel.modelName}` : '暂无数据'}">${topModel ? topModel.modelName : '暂无数据'}</div>
+            <div style="font-size: 0.8em; color: #6366f1; margin-top: 4px;">${topModel ? `${topModel.count} 次调用` : '--'}</div>
+          </div>
+          <div style="padding: 12px; border-radius: 10px; background: rgba(14, 165, 233, 0.08); border: 1px solid rgba(14, 165, 233, 0.2);">
+            <div style="font-size: 0.8em; color: var(--text-secondary);">高频 Agent</div>
+            <div style="font-size: 0.95em; color: var(--text-primary); font-weight: 600; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${topAgent ? topAgent.agentName : '暂无数据'}">${topAgent ? `${topAgent.agentEmoji || '🤖'} ${topAgent.agentName}` : '暂无数据'}</div>
+            <div style="font-size: 0.8em; color: #0ea5e9; margin-top: 4px;">${topAgent ? `${topAgent.total} 次调用` : '--'}</div>
+          </div>
+          <div style="padding: 12px; border-radius: 10px; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.2);">
+            <div style="font-size: 0.8em; color: var(--text-secondary);">日均调用</div>
+            <div style="font-size: 1.1em; color: #10b981; font-weight: 700; margin-top: 4px;">${avgDailyCalls.toLocaleString()} 次/天</div>
+            <div style="font-size: 0.75em; color: var(--text-secondary); margin-top: 4px;">按当前筛选范围</div>
+          </div>
+          <div style="padding: 12px; border-radius: 10px; background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.2);">
+            <div style="font-size: 0.8em; color: var(--text-secondary);">模型集中度（Top3）</div>
+            <div style="font-size: 1.1em; color: ${concentrationColor}; font-weight: 700; margin-top: 4px;">${top3TokenShare}%</div>
+            <div style="font-size: 0.75em; color: var(--text-secondary); margin-top: 4px;">${concentrationLevel}</div>
+          </div>
+        </div>
+      `;
+
+      // === Token 效率榜（每次调用平均 token）===
+      const tokenEfficiencyRank = [...validModels]
+        .map(m => ({
+          ...m,
+          avgTokenPerCall: m.count > 0 ? Math.round((m.tokens || 0) / m.count) : 0
+        }))
+        .sort((a, b) => b.avgTokenPerCall - a.avgTokenPerCall)
+        .slice(0, 6);
+
+      // === 指挥中心态势增强（监控向）===
+      const topAgentToken = (data.byAgent || []).slice(0, 5);
+      const maxAgentTokens = Math.max(...topAgentToken.map(a => a.totalTokens || 0), 1);
+      const agentCombatHtml = topAgentToken.map((a, idx) => {
+        const pct = Math.max(5, Math.round(((a.totalTokens || 0) / maxAgentTokens) * 100));
+        return `
+          <div class="mu-agent-combat-row" style="display:grid; grid-template-columns: minmax(90px, 1.1fr) 2fr auto; gap:8px; align-items:center; margin-bottom:7px;">
+            <div style="font-size:0.8em; color:var(--text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${a.agentEmoji || '🤖'} ${a.agentName}</div>
+            <div style="height:8px; border-radius:999px; background:rgba(0,0,0,0.06); overflow:hidden;">
+              <div style="height:100%; width:${pct}%; background:linear-gradient(90deg, rgba(14,165,233,0.85), rgba(99,102,241,0.85)); border-radius:999px;"></div>
+            </div>
+            <div style="font-size:0.75em; color:var(--text-primary); font-weight:600;">${formatTokens(a.totalTokens || 0)}</div>
+          </div>
+        `;
+      }).join('');
+
+      const commandCenterHtml = `
+        <div style="margin-bottom:20px; padding:14px; border-radius:12px; border:1px solid rgba(14,165,233,0.2); background:linear-gradient(135deg, rgba(14,165,233,0.04), rgba(99,102,241,0.04));">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+            <h4 style="margin:0; font-size:0.95em; color:var(--text-primary);">⚡ Agent 作战力</h4>
+            <span style="font-size:0.75em; color:var(--text-secondary); padding:3px 8px; background:rgba(14,165,233,0.1); border-radius:999px;">按 token 贡献排名</span>
+          </div>
+          <div style="padding:10px; border-radius:10px; background:rgba(14,165,233,0.04); border:1px solid rgba(14,165,233,0.15);">
+            ${agentCombatHtml || '<div class="empty-state">暂无 Agent 数据</div>'}
+          </div>
+        </div>
+      `;
+      
+      const maxAvgToken = tokenEfficiencyRank.length > 0 ? tokenEfficiencyRank[0].avgTokenPerCall || 1 : 1;
+      
+      const efficiencyCardsHtml = tokenEfficiencyRank.map((m, i) => {
+        const barPct = maxAvgToken > 0 ? ((m.avgTokenPerCall / maxAvgToken) * 100).toFixed(0) : 0;
+        const color = colors[i % colors.length];
+        return `
+          <div style="padding:10px; border-radius:10px; border:1px solid rgba(245,158,11,0.18); background:linear-gradient(135deg, rgba(245,158,11,0.04), rgba(251,191,36,0.04));">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:6px; margin-bottom:6px;">
+              <div style="font-size:0.82em; font-weight:600; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${m.provider}/${m.modelName}">${m.modelName}</div>
+              <span style="font-size:0.7em; padding:2px 6px; border-radius:999px; background:${color}22; color:${color}; font-weight:600;">#${i + 1}</span>
+            </div>
+            <div style="font-size:1.15em; font-weight:700; color:#f59e0b; margin-bottom:6px;">${formatTokens(m.avgTokenPerCall)} tok<span style="font-size:0.65em; font-weight:500; color:var(--text-secondary);">/次</span></div>
+            <div style="height:6px; background:rgba(0,0,0,0.06); border-radius:999px; overflow:hidden;">
+              <div style="width:${barPct}%; height:100%; background:linear-gradient(90deg, #f59e0b, #fbbf24); border-radius:999px; transition:width 0.5s;"></div>
+            </div>
+            <div style="font-size:0.72em; color:var(--text-secondary); margin-top:4px;">共 ${m.count} 次调用</div>
+          </div>
+        `;
+      }).join('');
+
+      const tokenEfficiencyHtml = `
+        <div style="margin-bottom:20px; padding:14px; border-radius:12px; border:1px solid rgba(245,158,11,0.18); background:rgba(245,158,11,0.03);">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+            <h4 style="margin:0; font-size:0.95em; color:var(--text-primary);">📈 Token 效率榜</h4>
+            <span style="font-size:0.75em; color:var(--text-secondary); padding:3px 8px; background:rgba(245,158,11,0.1); border-radius:999px;">平均每次调用</span>
+          </div>
+          <div class="mu-efficiency-grid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:10px;">
+            ${efficiencyCardsHtml || '<div class="empty-state">无数据</div>'}
+          </div>
+        </div>
+      `;
+
+      // === Agent-Model 贡献洞察 ===
+      // 找出 Top 3 Agent，展示每个 Agent 的主力模型和 token 贡献
+      const topAgents = (data.byAgent || []).slice(0, 3);
+      const modelNameByKey = Object.fromEntries(validModels.map(m => [`${m.provider}/${m.modelId}`, m.modelName || m.modelId]));
+      const agentModelInsightsHtml = topAgents.map((agent, idx) => {
+        // 直接使用 byAgent.models（后端稳定字段）构建该 Agent 的模型贡献
+        const agentModels = Object.entries(agent.models || {})
+          .map(([modelKey, stat]) => ({
+            modelKey,
+            modelName: modelNameByKey[modelKey] || modelKey.split('/').slice(1).join('/') || modelKey,
+            count: stat.count || 0,
+            tokens: stat.tokens || 0
+          }))
+          .sort((a, b) => (b.tokens || 0) - (a.tokens || 0))
+          .slice(0, 3);
+
+        const agentTotalTokens = agent.totalTokens || agentModels.reduce((sum, am) => sum + (am.tokens || 0), 0);
+        const color = colors[(idx + 5) % colors.length];
+        
+        const modelMiniListHtml = agentModels.map((am, i) => {
+          const tokenShare = agentTotalTokens > 0 ? ((am.tokens || 0) / agentTotalTokens * 100).toFixed(0) : 0;
+          return `
+            <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+              <div style="flex:1; font-size:0.75em; color:var(--text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${am.modelName}">${am.modelName}</div>
+              <div style="font-size:0.72em; color:var(--text-primary); font-weight:600;">${formatTokens(am.tokens || 0)}</div>
+              <div style="font-size:0.7em; color:var(--text-secondary);">(${tokenShare}%)</div>
+            </div>
+          `;
+        }).join('');
+        
+        return `
+          <div style="padding:12px; border-radius:10px; border:1px solid rgba(139,92,246,0.18); background:linear-gradient(135deg, rgba(139,92,246,0.04), rgba(168,85,247,0.04));">
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+              <span style="font-size:1.2em;">${agent.agentEmoji || '🤖'}</span>
+              <div style="flex:1;">
+                <div style="font-size:0.88em; font-weight:600; color:var(--text-primary);">${agent.agentName}</div>
+                <div style="font-size:0.72em; color:var(--text-secondary);">${agent.total} 次调用 · ${formatTokens(agentTotalTokens)} tokens</div>
+              </div>
+              <span style="font-size:0.7em; padding:2px 8px; border-radius:999px; background:${color}22; color:${color}; font-weight:600;">Top ${idx + 1}</span>
+            </div>
+            <div style="margin-top:8px; padding-top:8px; border-top:1px solid rgba(139,92,246,0.1);">
+              <div style="font-size:0.75em; color:var(--text-secondary); margin-bottom:6px;">主力模型:</div>
+              ${modelMiniListHtml || '<div style="font-size:0.75em; color:var(--text-secondary);">无数据</div>'}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      const agentModelInsightsBlockHtml = `
+        <div style="margin-bottom:20px; padding:14px; border-radius:12px; border:1px solid rgba(139,92,246,0.18); background:rgba(139,92,246,0.03);">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+            <h4 style="margin:0; font-size:0.95em; color:var(--text-primary);">🎯 Agent-Model 贡献洞察</h4>
+            <span style="font-size:0.75em; color:var(--text-secondary); padding:3px 8px; background:rgba(139,92,246,0.1); border-radius:999px;">Top Agent 主力模型</span>
+          </div>
+          <div class="mu-agent-insights-grid" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:12px;">
+            ${agentModelInsightsHtml || '<div class="empty-state">无数据</div>'}
+          </div>
+        </div>
+      `;
+
       const middleHtml = `
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
+        <div class="mu-middle-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; margin-bottom: 20px;">
           <div>
             <h4 style="margin: 0 0 12px; font-size: 0.95em; color: var(--text-primary);">按模型排名</h4>
             ${modelBarsHtml || '<div class="empty-state">无数据</div>'}
@@ -1331,6 +1713,45 @@ class Dashboard {
         </div>
       `;
 
+      const recentByDay = [...(data.byDay || [])].slice(-7);
+      const maxRecentDayTokens = Math.max(...recentByDay.map(d => d.totalTokens || 0), 1);
+      const timelineHtml = recentByDay.length > 0 ? recentByDay.map(d => {
+        const dt = new Date(d.date);
+        const dayLabel = Number.isNaN(dt.getTime()) ? d.date : dt.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
+        const pct = Math.max(4, Math.round(((d.totalTokens || 0) / maxRecentDayTokens) * 100));
+        return `
+          <div class="mu-timeline-row" style="display:grid; grid-template-columns: 64px 1fr auto; gap:8px; align-items:center; margin-bottom:7px;">
+            <div style="font-size:0.75em; color:var(--text-secondary);">${dayLabel}</div>
+            <div style="height:10px; border-radius:999px; background:rgba(0,0,0,0.06); overflow:hidden;">
+              <div style="height:100%; width:${pct}%; background:linear-gradient(90deg, rgba(59,130,246,0.8), rgba(168,85,247,0.8)); border-radius:999px;"></div>
+            </div>
+            <div style="font-size:0.75em; color:var(--text-primary); font-weight:600; min-width:64px; text-align:right;">${formatTokens(d.totalTokens || 0)}</div>
+          </div>
+        `;
+      }).join('') : '<div class="empty-state">暂无时间线数据</div>';
+
+      const weekLabels = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+      const weekTokenMap = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
+      (data.byDay || []).forEach(d => {
+        const dt = new Date(d.date);
+        if (!Number.isNaN(dt.getTime())) {
+          weekTokenMap[dt.getDay()] += d.totalTokens || 0;
+        }
+      });
+      const weekMax = Math.max(...Object.values(weekTokenMap), 1);
+      const weekHeatCells = weekLabels.map((label, dayIndex) => {
+        const value = weekTokenMap[dayIndex] || 0;
+        const intensity = value > 0 ? (value / weekMax) : 0;
+        const bg = `rgba(59,130,246, ${0.08 + intensity * 0.72})`;
+        const textColor = intensity > 0.5 ? '#ffffff' : 'var(--text-primary)';
+        return `
+          <div style="padding:8px 4px; border-radius:10px; background:${bg}; border:1px solid rgba(59,130,246,0.16); text-align:center; display:flex; flex-direction:column; justify-content:center; align-items:center; gap:4px; min-height:68px;">
+            <div style="font-size:0.8em; color:${intensity > 0.5 ? 'rgba(255,255,255,0.9)' : 'var(--text-secondary)'}; line-height:1.2;">${label}</div>
+            <div title="${formatTokens(value)}" style="font-size:clamp(0.75em, 2.5cqi, 1em); font-weight:700; color:${textColor}; line-height:1.15; word-break:break-word; text-align:center;">${formatTokens(value)}</div>
+          </div>
+        `;
+      }).join('');
+
       // === 底部趋势图区域 ===
       const trendHtml = `
         <div>
@@ -1338,10 +1759,39 @@ class Dashboard {
           <div style="height: 200px; position: relative;">
             <canvas id="modelUsageTrendCanvas"></canvas>
           </div>
+          <div class="mu-trend-grid" style="margin-top: 14px; display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:12px;">
+            <div style="padding: 12px; border-radius: 10px; border: 1px solid rgba(59,130,246,0.15); background: rgba(59,130,246,0.03);">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; gap:8px; flex-wrap:wrap;">
+                <h4 style="margin: 0; font-size: 0.9em; color: var(--text-primary);">🎯 作战态势时间线（近7天）</h4>
+                <span style="font-size:0.72em; color:var(--text-secondary);">按每日 token</span>
+              </div>
+              ${timelineHtml}
+            </div>
+            <div style="padding: 12px; border-radius: 10px; border: 1px solid rgba(59,130,246,0.15); background: rgba(59,130,246,0.03);">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; gap:8px; flex-wrap:wrap;">
+                <h4 style="margin: 0; font-size: 0.9em; color: var(--text-primary);">🔥 时段热力（按周内日）</h4>
+              </div>
+              <div class="mu-week-heat-grid" style="display:grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap:8px;">
+                ${weekHeatCells}
+              </div>
+            </div>
+          </div>
         </div>
       `;
 
-      container.innerHTML = summaryHtml + middleHtml + trendHtml;
+      container.innerHTML = summaryHtml + insightsHtml + commandCenterHtml + modelTokensHtml + tokenEfficiencyHtml + agentModelInsightsBlockHtml + middleHtml + trendHtml;
+
+      // 绑定 Token 维度切换按钮事件
+      const dimBtns = container.querySelectorAll('.dim-btn');
+      dimBtns.forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const selectedDim = e.target.dataset.dimension;
+          if (selectedDim && selectedDim !== this.modelTokenDimension) {
+            this.modelTokenDimension = selectedDim;
+            this.updateModelUsageStats();
+          }
+        });
+      });
 
       // 渲染趋势图表
       if (window.chartsManager && data.byDay.length > 0) {
@@ -1396,6 +1846,12 @@ class Dashboard {
     
     this.logUpdateTimer = setTimeout(async () => {
       try {
+        const container = document.getElementById('logContainer');
+        if (!container) {
+          this.logUpdateTimer = null;
+          return;
+        }
+
         const response = await fetch('/api/logs/recent?count=50');
         if (!response.ok) {
           throw new Error(`HTTP错误: ${response.status}`);
@@ -1407,29 +1863,36 @@ class Dashboard {
           window.searchManager.updateLogsCache(logs);
         } else {
           // 如果没有搜索管理器，使用原始渲染方式
-          const html = logs.map(log => {
-            const levelClass = log.level === 'error' ? 'log-error' : 
-                              log.level === 'warn' ? 'log-warn' : 'log-info';
-            const time = new Date(log.timestamp).toLocaleTimeString('zh-CN');
-            // 转义HTML防止XSS
-            const message = this.escapeHtml(log.message);
-            return `<div class="log-entry ${levelClass}">
-              <span class="log-time">${time}</span>
-              ${message}
-            </div>`;
-          }).join('');
-          
-          const container = document.getElementById('logContainer');
-          const wasScrolledToBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 10;
-          container.innerHTML = html;
-          
-          if (this.autoScroll && wasScrolledToBottom) {
-            container.scrollTop = container.scrollHeight;
+          if (!Array.isArray(logs) || logs.length === 0) {
+            container.innerHTML = '<div class="empty-state">暂无日志</div>';
+          } else {
+            const html = logs.map(log => {
+              const levelClass = log.level === 'error' ? 'log-error' : 
+                                log.level === 'warn' ? 'log-warn' : 'log-info';
+              const time = new Date(log.timestamp).toLocaleTimeString('zh-CN');
+              // 转义HTML防止XSS
+              const message = this.escapeHtml(log.message);
+              return `<div class="log-entry ${levelClass}">
+                <span class="log-time">${time}</span>
+                ${message}
+              </div>`;
+            }).join('');
+            
+            const wasScrolledToBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 10;
+            container.innerHTML = html;
+            
+            if (this.autoScroll && wasScrolledToBottom) {
+              container.scrollTop = container.scrollHeight;
+            }
           }
         }
       } catch (error) {
         console.error('更新日志失败:', error);
-        // 不显示错误，避免干扰用户
+        // 显示错误状态
+        const container = document.getElementById('logContainer');
+        if (container) {
+          container.innerHTML = '<div class="empty-state" style="color: var(--error);">日志加载失败</div>';
+        }
       } finally {
         this.logUpdateTimer = null;
       }

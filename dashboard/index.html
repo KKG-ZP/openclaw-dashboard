@@ -4,9 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>🎩 OpenClaw 作战指挥中心</title>
-    <link rel="stylesheet" href="/static/css/style.css">
-    <link rel="stylesheet" href="/static/css/layout-improvements.css">
-    <link rel="stylesheet" href="/static/css/right-sidebar.css">
+    <link rel="stylesheet" href="/static/css/style.css?v=20260226-3">
+    <link rel="stylesheet" href="/static/css/layout-improvements.css?v=20260226-mobile-1">
+    <link rel="stylesheet" href="/static/css/right-sidebar.css?v=20260226-mobile-1">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -30,6 +30,16 @@
             </div>
         </header>
 
+        <!-- 移动端快捷导航 -->
+        <nav class="mobile-monitor-nav" id="mobileMonitorNav" aria-label="移动端监控导航">
+            <button class="mobile-monitor-nav-btn" data-target="system-overview">概览</button>
+            <button class="mobile-monitor-nav-btn" data-target="agents">Agent</button>
+            <button class="mobile-monitor-nav-btn" data-target="model-usage">模型</button>
+            <button class="mobile-monitor-nav-btn" data-target="current-tasks">任务</button>
+            <button class="mobile-monitor-nav-btn" data-target="realtimeLogsCard">日志</button>
+            <button class="mobile-monitor-nav-btn" data-target="rightSidebar">侧栏</button>
+        </nav>
+
         <!-- 主布局：内容区域 + 右侧边栏 -->
         <div class="main-layout">
             <!-- 主内容区域 -->
@@ -46,12 +56,12 @@
                     <div class="loading">加载中...</div>
                 </div>
                 <div class="card-content" id="metricsChart" style="display: none;">
-                    <canvas id="metricsChartCanvas"></canvas>
+                    <canvas id="metricsChartCanvas" style="min-height:260px;"></canvas>
                 </div>
             </div>
 
             <!-- Agent组织架构 - 扩展显示 -->
-            <div class="card card-wide" data-card-id="agents" style="grid-column: span 2;">
+            <div class="card card-wide" data-card-id="agents">
                 <div class="card-header" style="background: linear-gradient(135deg, rgba(59, 130, 246, 0.05), rgba(139, 92, 246, 0.05));">
                     <span class="card-icon" style="font-size: 1.5em;">🤖</span>
                     <span class="card-title" style="font-size: 1.2em; font-weight: 600;">Agent 组织架构</span>
@@ -70,7 +80,7 @@
             </div>
 
             <!-- 模型使用量统计 -->
-            <div class="card card-wide" data-card-id="model-usage" style="grid-column: span 2;">
+            <div class="card card-wide" data-card-id="model-usage">
                 <div class="card-header">
                     <span class="card-icon">📊</span>
                     <span class="card-title">模型使用量统计</span>
@@ -78,7 +88,8 @@
                         <select id="modelUsageRange" class="btn-small">
                             <option value="7">最近7天</option>
                             <option value="14">最近14天</option>
-                            <option value="30" selected>最近30天</option>
+                            <option value="30">最近30天</option>
+                            <option value="" selected>全部历史</option>
                         </select>
                     </div>
                 </div>
@@ -108,7 +119,7 @@
                     <div class="loading">加载中...</div>
                 </div>
                 <div class="card-content" id="tasksChart" style="display: none;">
-                    <canvas id="tasksChartCanvas"></canvas>
+                    <canvas id="tasksChartCanvas" style="min-height:260px;"></canvas>
                 </div>
             </div>
 
@@ -122,7 +133,7 @@
                     <div class="loading">加载中...</div>
                 </div>
                 <div class="card-content" id="modelsChart" style="display: none;">
-                    <canvas id="modelsChartCanvas"></canvas>
+                    <canvas id="modelsChartCanvas" style="min-height:260px;"></canvas>
                 </div>
             </div>
 
@@ -140,7 +151,7 @@
                 </div>
 
                 <!-- 实时日志面板 -->
-                <div class="card full-width">
+                <div class="card full-width" id="realtimeLogsCard">
                     <div class="card-header">
                         <span class="card-icon">📝</span>
                         <span class="card-title">实时日志</span>
@@ -255,11 +266,11 @@
         </div>
     </div>
 
-    <script src="/static/js/charts.js"></script>
+    <script src="/static/js/charts.js?v=20260226-1"></script>
     <script src="/static/js/search.js"></script>
-    <script src="/static/js/notifications.js"></script>
-    <script src="/static/js/ui-enhancements.js"></script>
-    <script src="/static/js/dashboard.js"></script>
+    <script src="/static/js/notifications.js?v=20260226-4"></script>
+    <script src="/static/js/ui-enhancements.js?v=20260226-mobile-1"></script>
+    <script src="/static/js/dashboard.js?v=20260226-12"></script>
     <script src="/static/js/agent-detail.js"></script>
     <script src="/static/js/task-detail.js"></script>
 </body>

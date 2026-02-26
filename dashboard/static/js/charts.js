@@ -120,6 +120,7 @@ class ChartsManager {
       });
 
       container.style.display = 'block';
+      requestAnimationFrame(() => { if (this.charts.metrics) this.charts.metrics.resize(); });
     } catch (error) {
       console.error('初始化性能趋势图失败:', error);
     }
@@ -211,6 +212,7 @@ class ChartsManager {
       });
 
       container.style.display = 'block';
+      requestAnimationFrame(() => { if (this.charts.channels) this.charts.channels.resize(); });
     } catch (error) {
       console.error('初始化消息统计图失败:', error);
     }
@@ -296,6 +298,7 @@ class ChartsManager {
       });
 
       container.style.display = 'block';
+      requestAnimationFrame(() => { if (this.charts.tasks) this.charts.tasks.resize(); });
     } catch (error) {
       console.error('初始化任务分布图失败:', error);
     }
@@ -390,6 +393,7 @@ class ChartsManager {
       });
 
       container.style.display = 'block';
+      requestAnimationFrame(() => { if (this.charts.models) this.charts.models.resize(); });
     } catch (error) {
       console.error('初始化模型使用统计图失败:', error);
     }
@@ -496,6 +500,7 @@ class ChartsManager {
       });
 
       container.style.display = 'block';
+      requestAnimationFrame(() => { if (this.charts.health) this.charts.health.resize(); });
     } catch (error) {
       console.error('初始化健康度趋势图失败:', error);
     }
