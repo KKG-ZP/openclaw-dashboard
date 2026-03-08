@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>🎩 OpenClaw 作战指挥中心</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=20260226-3">
+    <link rel="stylesheet" href="/static/css/style.css?v=20260302-7">
     <link rel="stylesheet" href="/static/css/layout-improvements.css?v=20260226-mobile-1">
     <link rel="stylesheet" href="/static/css/right-sidebar.css?v=20260226-mobile-1">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -35,6 +35,7 @@
             <button class="mobile-monitor-nav-btn" data-target="system-overview">概览</button>
             <button class="mobile-monitor-nav-btn" data-target="agents">Agent</button>
             <button class="mobile-monitor-nav-btn" data-target="model-usage">模型</button>
+            <button class="mobile-monitor-nav-btn" data-target="skills-usage">技能</button>
             <button class="mobile-monitor-nav-btn" data-target="current-tasks">任务</button>
             <button class="mobile-monitor-nav-btn" data-target="realtimeLogsCard">日志</button>
             <button class="mobile-monitor-nav-btn" data-target="rightSidebar">侧栏</button>
@@ -94,6 +95,24 @@
                     </div>
                 </div>
                 <div class="card-content" id="modelUsageStats">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+
+            <!-- 技能使用统计 -->
+            <div class="card card-wide" data-card-id="skills-usage">
+                <div class="card-header">
+                    <span class="card-icon">🧠</span>
+                    <span class="card-title">技能使用统计</span>
+                    <div class="card-actions">
+                        <select id="skillUsageRange" class="btn-small">
+                            <option value="7" selected>最近7天</option>
+                            <option value="30">最近30天</option>
+                            <option value="">全部历史</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="card-content" id="skillUsageStats">
                     <div class="loading">加载中...</div>
                 </div>
             </div>
@@ -269,8 +288,8 @@
     <script src="/static/js/charts.js?v=20260226-1"></script>
     <script src="/static/js/search.js"></script>
     <script src="/static/js/notifications.js?v=20260226-4"></script>
-    <script src="/static/js/ui-enhancements.js?v=20260226-mobile-1"></script>
-    <script src="/static/js/dashboard.js?v=20260226-12"></script>
+    <script src="/static/js/ui-enhancements.js?v=20260302-mobile-5"></script>
+    <script src="/static/js/dashboard.js?v=20260302-16"></script>
     <script src="/static/js/agent-detail.js"></script>
     <script src="/static/js/task-detail.js"></script>
 </body>

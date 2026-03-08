@@ -270,6 +270,7 @@ class Dashboard {
       'channelsStatus',
       'modelsQuota',
       'taskHistory',
+      'skillUsageStats',
       'logContainer'
     ];
     
@@ -296,6 +297,7 @@ class Dashboard {
     this.updateModelsQuota();
     this.updateTaskHistory();
     this.updateModelUsageStats();
+    this.updateSkillUsageStats();
     this.updateLogs();
     
     // 更新侧边栏布局的特定面板
@@ -631,13 +633,13 @@ class Dashboard {
     const memColor = getMemColor(memoryPercent);
     
     const html = `
-      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin-bottom: 16px;">
-        <div style="background: ${isRunning ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)'}; padding: 14px; border-radius: 10px; text-align: center; border: 1px solid ${isRunning ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)'};">
+      <div class="so-metric-grid" style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px;">
+        <div class="so-metric-card" style="padding: 14px; border-radius: 10px; text-align: center; background: ${isRunning ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)'}; border: 1px solid ${isRunning ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)'};">
           <div style="font-size: 1.8em; margin-bottom: 6px;">${isRunning ? '✅' : '❌'}</div>
           <div style="font-size: 0.75em; color: var(--text-secondary);">Gateway</div>
           <div style="font-size: 0.9em; font-weight: 600; color: ${isRunning ? '#10b981' : '#ef4444'};">${isRunning ? '运行中' : '已停止'}</div>
         </div>
-        <div style="background: rgba(59, 130, 246, 0.08); padding: 14px; border-radius: 10px; text-align: center; border: 1px solid rgba(59, 130, 246, 0.2);">
+        <div class="so-metric-card" style="padding: 14px; border-radius: 10px; text-align: center; background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.2);">
           <div style="position: relative; width: 60px; height: 60px; margin: 0 auto 8px;">
             <svg width="60" height="60" style="transform: rotate(-90deg);">
               <circle cx="30" cy="30" r="26" fill="none" stroke="rgba(59, 130, 246, 0.2)" stroke-width="6"/>
@@ -653,7 +655,7 @@ class Dashboard {
           </div>
           <div style="font-size: 0.75em; color: var(--text-secondary);">CPU 占用</div>
         </div>
-        <div style="background: rgba(139, 92, 246, 0.08); padding: 14px; border-radius: 10px; text-align: center; border: 1px solid rgba(139, 92, 246, 0.2);">
+        <div class="so-metric-card" style="padding: 14px; border-radius: 10px; text-align: center; background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.2);">
           <div style="position: relative; width: 60px; height: 60px; margin: 0 auto 8px;">
             <svg width="60" height="60" style="transform: rotate(-90deg);">
               <circle cx="30" cy="30" r="26" fill="none" stroke="rgba(139, 92, 246, 0.2)" stroke-width="6"/>
@@ -670,33 +672,33 @@ class Dashboard {
           <div style="font-size: 0.75em; color: var(--text-secondary);" title="${memoryPercent.toFixed(1)}% 占用">内存占用</div>
         </div>
       </div>
-      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 6px; font-size: 0.85em;">
-        <div style="display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: var(--bg-secondary); border-radius: 8px; min-width: 0;">
+      <div class="so-details-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 6px; font-size: 0.85em;">
+        <div class="so-detail-item" style="display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: var(--bg-secondary); border-radius: 8px; min-width: 0;">
           <span style="font-size: 1.1em;">🏠</span>
           <span style="color: var(--text-secondary);">主机</span>
           <span title="${system.hostname}" style="margin-left: auto; font-weight: 500; min-width: 0; max-width: 62%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${system.hostname}</span>
         </div>
-        <div style="display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: var(--bg-secondary); border-radius: 8px;">
+        <div class="so-detail-item" style="display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: var(--bg-secondary); border-radius: 8px;">
           <span style="font-size: 1.1em;">🔢</span>
           <span style="color: var(--text-secondary);">PID</span>
           <span style="margin-left: auto; font-weight: 500;">${system.gateway.pid || 'N/A'}</span>
         </div>
-        <div style="display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: var(--bg-secondary); border-radius: 8px;">
+        <div class="so-detail-item" style="display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: var(--bg-secondary); border-radius: 8px;">
           <span style="font-size: 1.1em;">⏱️</span>
           <span style="color: var(--text-secondary);">运行时间</span>
           <span style="margin-left: auto; font-weight: 500;">${system.gateway.uptime || 'N/A'}</span>
         </div>
-        <div style="display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: var(--bg-secondary); border-radius: 8px;">
+        <div class="so-detail-item" style="display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: var(--bg-secondary); border-radius: 8px;">
           <span style="font-size: 1.1em;">🌐</span>
           <span style="color: var(--text-secondary);">端口</span>
           <span style="margin-left: auto; font-weight: 500;">${system.gateway.port || 'N/A'}</span>
         </div>
-        <div style="display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: var(--bg-secondary); border-radius: 8px;">
+        <div class="so-detail-item" style="display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: var(--bg-secondary); border-radius: 8px;">
           <span style="font-size: 1.1em;">📦</span>
           <span style="color: var(--text-secondary);">Node.js</span>
           <span style="margin-left: auto; font-weight: 500;">${system.nodeVersion}</span>
         </div>
-        <div style="display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: var(--bg-secondary); border-radius: 8px; min-width: 0;">
+        <div class="so-detail-item" style="display: flex; align-items: center; gap: 8px; padding: 5px 10px; background: var(--bg-secondary); border-radius: 8px; min-width: 0;">
           <span style="font-size: 1.1em;">🖥️</span>
           <span style="color: var(--text-secondary);">架构</span>
           <span title="${system.platform} ${system.arch}" style="margin-left: auto; font-weight: 500; min-width: 0; max-width: 62%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${system.platform} ${system.arch}</span>
@@ -823,7 +825,7 @@ class Dashboard {
             const subBorder = subActive ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)';
             return `
               <div class="clickable agent-subagent-card" onclick="event.stopPropagation(); window.showAgentDetail('${subAgent.id}')" style="
-                width: 120px; padding: 12px; text-align: center;
+                padding: 12px; text-align: center;
                 background: ${subBg}; border-radius: 12px; cursor: pointer;
                 border: 1px solid ${subBorder}; transition: all 0.2s;
               " onmouseover="this.style.transform='translateY(-3px)'; this.style.boxShadow='0 6px 16px rgba(0,0,0,0.12)';" 
@@ -841,7 +843,7 @@ class Dashboard {
             `;
           } else {
             return `
-              <div class="agent-subagent-card" style="width: 120px; padding: 12px; text-align: center; background: rgba(100,100,100,0.05); border: 1px dashed var(--border); border-radius: 12px;">
+              <div class="agent-subagent-card" style="padding: 12px; text-align: center; background: rgba(100,100,100,0.05); border: 1px dashed var(--border); border-radius: 12px;">
                 <div style="font-size: 2em; margin-bottom: 8px;">🔗</div>
                 <div style="font-size: 0.85em; color: var(--text-secondary); margin-bottom: 2px;">${subId}</div>
                 <div style="font-size: 0.7em; color: var(--text-muted);">未配置</div>
@@ -855,7 +857,7 @@ class Dashboard {
             <div style="font-size: 0.8em; color: var(--text-secondary); margin-bottom: 10px; font-weight: 500;">
               <span style="margin-right: 4px;">👥</span> 子 Agent (${agent.subagents.length})
             </div>
-            <div class="agent-subagent-list" style="display: flex; flex-wrap: wrap; gap: 12px;">
+            <div class="agent-subagent-list">
               ${subagentItems}
             </div>
           </div>
@@ -875,8 +877,8 @@ class Dashboard {
           " onmouseover="this.style.transform='translateX(4px)'; this.style.borderColor='var(--accent)';" 
              onmouseout="this.style.transform='none'; this.style.borderColor='${isActive ? 'rgba(16, 185, 129, 0.3)' : 'var(--border)'}';">
             
-            <div style="display: flex; align-items: center; justify-content: space-between;">
-              <div style="display: flex; align-items: center; gap: 12px;">
+            <div class="agent-main-head" style="display: grid; grid-template-columns: minmax(220px, 1fr) minmax(360px, auto); gap: 14px; align-items: center;">
+              <div class="agent-main-left" style="display: flex; align-items: center; gap: 12px; min-width: 0;">
                 <div style="font-size: 1.8em; width: 46px; height: 46px; display: flex; align-items: center; justify-content: center; background: ${statusBg}; border-radius: 10px;">
                   ${agent.emoji}
                 </div>
@@ -888,20 +890,20 @@ class Dashboard {
                   <div style="font-size: 0.75em; color: var(--text-secondary); font-family: monospace;">${agent.id}</div>
                 </div>
               </div>
-              <div style="display: flex; align-items: center; gap: 16px;">
-                <div style="text-align: center;">
+              <div class="agent-main-metas" style="display: grid; grid-template-columns: minmax(170px, 1.4fr) repeat(3, minmax(72px, auto)); gap: 12px; align-items: center; justify-content: end;">
+                <div class="agent-meta-item agent-meta-model" style="text-align: center; min-width: 0;">
                   <div style="font-size: 0.7em; color: var(--text-secondary);">模型</div>
-                  <div style="font-size: 0.8em; font-weight: 500;">${agent.model || 'N/A'}</div>
+                  <div title="${agent.model || 'N/A'}" style="font-size: 0.8em; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${agent.model || 'N/A'}</div>
                 </div>
-                <div style="text-align: center;">
+                <div class="agent-meta-item" style="text-align: center;">
                   <div style="font-size: 0.7em; color: var(--text-secondary);">会话</div>
                   <div style="font-size: 0.8em; font-weight: 500;">${agent.sessionCount || 0}</div>
                 </div>
-                <div style="text-align: center;">
+                <div class="agent-meta-item" style="text-align: center;">
                   <div style="font-size: 0.7em; color: var(--text-secondary);">活动</div>
                   <div style="font-size: 0.8em; font-weight: 500;">${agent.lastActivity ? this._formatRelativeTime(agent.lastActivity) : 'N/A'}</div>
                 </div>
-                <span style="padding: 4px 10px; background: ${statusBg}; color: ${statusColor}; border-radius: 16px; font-size: 0.75em; font-weight: 600;">
+                <span class="agent-status-chip" style="padding: 4px 10px; background: ${statusBg}; color: ${statusColor}; border-radius: 16px; font-size: 0.75em; font-weight: 600;">
                   <span style="display: inline-block; width: 5px; height: 5px; background: ${statusColor}; border-radius: 50%; margin-right: 5px; ${isActive ? 'animation: pulse 2s infinite;' : ''}"></span>
                   ${statusText}
                 </span>
@@ -1730,27 +1732,92 @@ class Dashboard {
         `;
       }).join('') : '<div class="empty-state">暂无时间线数据</div>';
 
-      const weekLabels = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-      const weekTokenMap = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
+      const weekLabels = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+      const parseLocalDate = (dateStr) => {
+        if (!dateStr || typeof dateStr !== 'string') return null;
+        const m = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (!m) return null;
+        return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+      };
+      const formatDateKey = (dt) => {
+        const y = dt.getFullYear();
+        const m = String(dt.getMonth() + 1).padStart(2, '0');
+        const d = String(dt.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+      };
+      const formatWeekLabel = (weekStart) => {
+        const start = `${String(weekStart.getMonth() + 1).padStart(2, '0')}/${String(weekStart.getDate()).padStart(2, '0')}`;
+        const weekEnd = new Date(weekStart);
+        weekEnd.setDate(weekEnd.getDate() + 6);
+        const end = `${String(weekEnd.getMonth() + 1).padStart(2, '0')}/${String(weekEnd.getDate()).padStart(2, '0')}`;
+        return `${start}-${end}`;
+      };
+
+      // 关键修复：按“自然周”分桶，避免跨周累计到同一周内日。
+      const weekBuckets = {};
       (data.byDay || []).forEach(d => {
-        const dt = new Date(d.date);
-        if (!Number.isNaN(dt.getTime())) {
-          weekTokenMap[dt.getDay()] += d.totalTokens || 0;
+        const dt = parseLocalDate(d.date);
+        if (!dt || Number.isNaN(dt.getTime())) return;
+        // ISO 周：周一=0 ... 周日=6
+        const dayOfWeek = (dt.getDay() + 6) % 7;
+        const weekStart = new Date(dt);
+        weekStart.setDate(dt.getDate() - dayOfWeek);
+        const weekKey = formatDateKey(weekStart);
+
+        if (!weekBuckets[weekKey]) {
+          weekBuckets[weekKey] = {
+            weekKey,
+            weekLabel: formatWeekLabel(weekStart),
+            days: { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 },
+            weekTotal: 0
+          };
         }
+
+        const tokens = d.totalTokens || 0;
+        weekBuckets[weekKey].days[dayOfWeek] += tokens;
+        weekBuckets[weekKey].weekTotal += tokens;
       });
-      const weekMax = Math.max(...Object.values(weekTokenMap), 1);
-      const weekHeatCells = weekLabels.map((label, dayIndex) => {
-        const value = weekTokenMap[dayIndex] || 0;
-        const intensity = value > 0 ? (value / weekMax) : 0;
-        const bg = `rgba(59,130,246, ${0.08 + intensity * 0.72})`;
-        const textColor = intensity > 0.5 ? '#ffffff' : 'var(--text-primary)';
+
+      const allWeekRows = Object.values(weekBuckets).sort((a, b) => a.weekKey.localeCompare(b.weekKey));
+      const maxVisibleWeeks = 8;
+      const weekRows = allWeekRows.slice(-maxVisibleWeeks);
+      const weekGlobalMax = Math.max(
+        ...weekRows.flatMap(row => Object.values(row.days)),
+        1
+      );
+
+      const weekHeatHeader = `
+        <div style="font-size:0.74em; color:var(--text-secondary); text-align:center; padding:6px 4px;">自然周</div>
+        ${weekLabels.map(label => `<div style="font-size:0.74em; color:var(--text-secondary); text-align:center; padding:6px 2px;">${label}</div>`).join('')}
+        <div style="font-size:0.74em; color:var(--text-secondary); text-align:center; padding:6px 4px;">周总量</div>
+      `;
+
+      const weekHeatRows = weekRows.length > 0 ? weekRows.map(row => {
+        const dayCells = weekLabels.map((_, dayIndex) => {
+          const value = row.days[dayIndex] || 0;
+          const intensity = value > 0 ? (value / weekGlobalMax) : 0;
+          const bg = `rgba(59,130,246, ${0.08 + intensity * 0.74})`;
+          const textColor = intensity > 0.5 ? '#ffffff' : 'var(--text-primary)';
+          return `
+            <div title="${formatTokens(value)}" style="height:44px; border-radius:8px; background:${bg}; border:1px solid rgba(59,130,246,0.16); display:flex; align-items:center; justify-content:center; font-size:0.76em; font-weight:700; color:${textColor};">
+              ${formatTokens(value)}
+            </div>
+          `;
+        }).join('');
+
         return `
-          <div style="padding:8px 4px; border-radius:10px; background:${bg}; border:1px solid rgba(59,130,246,0.16); text-align:center; display:flex; flex-direction:column; justify-content:center; align-items:center; gap:4px; min-height:68px;">
-            <div style="font-size:0.8em; color:${intensity > 0.5 ? 'rgba(255,255,255,0.9)' : 'var(--text-secondary)'}; line-height:1.2;">${label}</div>
-            <div title="${formatTokens(value)}" style="font-size:clamp(0.75em, 2.5cqi, 1em); font-weight:700; color:${textColor}; line-height:1.15; word-break:break-word; text-align:center;">${formatTokens(value)}</div>
-          </div>
+          <div style="font-size:0.74em; color:var(--text-primary); font-weight:600; text-align:center; padding:0 4px; align-self:center;">${row.weekLabel}</div>
+          ${dayCells}
+          <div style="font-size:0.76em; color:#2563eb; font-weight:700; text-align:center; padding:0 4px; align-self:center;">${formatTokens(row.weekTotal)}</div>
         `;
-      }).join('');
+      }).join('') : '<div class="empty-state" style="grid-column:1 / -1;">暂无周内热力数据</div>';
+
+      const weekHeatGridHtml = `
+        <div class="mu-week-heat-grid" style="display:grid; grid-template-columns: minmax(84px, 1.2fr) repeat(7, minmax(52px, 1fr)) minmax(76px, 1fr); gap:6px; align-items:stretch;">
+          ${weekHeatHeader}
+          ${weekHeatRows}
+        </div>
+      `;
 
       // === 底部趋势图区域 ===
       const trendHtml = `
@@ -1759,21 +1826,20 @@ class Dashboard {
           <div style="height: 200px; position: relative;">
             <canvas id="modelUsageTrendCanvas"></canvas>
           </div>
-          <div class="mu-trend-grid" style="margin-top: 14px; display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:12px;">
-            <div style="padding: 12px; border-radius: 10px; border: 1px solid rgba(59,130,246,0.15); background: rgba(59,130,246,0.03);">
+          <div class="mu-trend-grid" style="margin-top: 14px; display:flex; flex-wrap:wrap; gap:12px; align-items:flex-start;">
+            <div style="flex:1 1 320px; min-width:300px; padding: 12px; border-radius: 10px; border: 1px solid rgba(59,130,246,0.15); background: rgba(59,130,246,0.03);">
               <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; gap:8px; flex-wrap:wrap;">
                 <h4 style="margin: 0; font-size: 0.9em; color: var(--text-primary);">🎯 作战态势时间线（近7天）</h4>
                 <span style="font-size:0.72em; color:var(--text-secondary);">按每日 token</span>
               </div>
               ${timelineHtml}
             </div>
-            <div style="padding: 12px; border-radius: 10px; border: 1px solid rgba(59,130,246,0.15); background: rgba(59,130,246,0.03);">
+            <div style="flex:1.3 1 520px; min-width:360px; padding: 12px; border-radius: 10px; border: 1px solid rgba(59,130,246,0.15); background: rgba(59,130,246,0.03);">
               <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; gap:8px; flex-wrap:wrap;">
-                <h4 style="margin: 0; font-size: 0.9em; color: var(--text-primary);">🔥 时段热力（按周内日）</h4>
+                <h4 style="margin: 0; font-size: 0.9em; color: var(--text-primary);">🔥 时段热力（按自然周内日）</h4>
+                <span style="font-size:0.72em; color:var(--text-secondary);">展示最近 ${Math.max(weekRows.length, 1)} 个自然周</span>
               </div>
-              <div class="mu-week-heat-grid" style="display:grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap:8px;">
-                ${weekHeatCells}
-              </div>
+              ${weekHeatGridHtml}
             </div>
           </div>
         </div>
@@ -1806,6 +1872,94 @@ class Dashboard {
     } catch (error) {
       console.error('更新模型使用量统计失败:', error);
       container.innerHTML = '<div class="empty-state" style="color: var(--error);">加载模型使用量失败</div>';
+    }
+  }
+
+  // 更新技能使用统计面板
+  async updateSkillUsageStats() {
+    const container = document.getElementById('skillUsageStats');
+    if (!container) return;
+
+    const rangeSelect = document.getElementById('skillUsageRange');
+    const selectedValue = rangeSelect ? rangeSelect.value : '7';
+    const daysParam = selectedValue ? `days=${selectedValue}` : '';
+
+    if (rangeSelect && !rangeSelect._bound) {
+      rangeSelect._bound = true;
+      rangeSelect.addEventListener('change', () => this.updateSkillUsageStats());
+    }
+
+    try {
+      const response = await fetch(`/api/skills/usage?${daysParam}`);
+      if (!response.ok) throw new Error(`HTTP错误: ${response.status}`);
+
+      const data = await response.json();
+      const summary = data.summary || {};
+      const reads = data.skillReads || [];
+      const execs = data.skillExecs || [];
+      const findings = data.findings || [];
+
+      const summaryCards = `
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:10px; margin-bottom: 14px;">
+          <div style="padding:12px; border-radius:10px; background:rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.2); text-align:center;">
+            <div style="font-size:1.35em; font-weight:700; color:#3b82f6;">${(summary.totalToolCalls || 0).toLocaleString()}</div>
+            <div style="font-size:0.78em; color:var(--text-secondary);">总工具调用</div>
+          </div>
+          <div style="padding:12px; border-radius:10px; background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.2); text-align:center;">
+            <div style="font-size:1.35em; font-weight:700; color:#10b981;">${(summary.skillReads || 0).toLocaleString()}</div>
+            <div style="font-size:0.78em; color:var(--text-secondary);">技能说明读取</div>
+          </div>
+          <div style="padding:12px; border-radius:10px; background:rgba(139,92,246,0.08); border:1px solid rgba(139,92,246,0.2); text-align:center;">
+            <div style="font-size:1.35em; font-weight:700; color:#8b5cf6;">${(summary.skillExecs || 0).toLocaleString()}</div>
+            <div style="font-size:0.78em; color:var(--text-secondary);">技能实际执行</div>
+          </div>
+          <div style="padding:12px; border-radius:10px; background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.2); text-align:center;">
+            <div style="font-size:1.35em; font-weight:700; color:#f59e0b;">${summary.execSkillUsageRate || 0}%</div>
+            <div style="font-size:0.78em; color:var(--text-secondary);">exec技能命中率</div>
+          </div>
+        </div>
+      `;
+
+      const renderList = (arr, emptyText) => {
+        if (!arr || arr.length === 0) {
+          return `<div class="empty-state">${emptyText}</div>`;
+        }
+        return arr.slice(0, 8).map(item => `
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 10px; background:var(--bg-secondary); border-radius:8px; margin-bottom:6px;">
+            <span style="font-size:0.86em; color:var(--text-primary);">${item.name}</span>
+            <span style="font-size:0.82em; color:var(--text-secondary); font-weight:600;">${item.count}</span>
+          </div>
+        `).join('');
+      };
+
+      const findingsHtml = findings.length > 0
+        ? `<div style="margin-top:12px; padding:10px; border-radius:10px; border:1px solid rgba(239,68,68,0.18); background:rgba(239,68,68,0.04);">
+            <div style="font-size:0.84em; font-weight:600; color:#ef4444; margin-bottom:6px;">⚠️ 待改进</div>
+            ${findings.map(f => `<div style="font-size:0.8em; color:var(--text-secondary); margin-bottom:4px;">• ${f}</div>`).join('')}
+          </div>`
+        : `<div style="margin-top:12px; padding:10px; border-radius:10px; border:1px solid rgba(16,185,129,0.18); background:rgba(16,185,129,0.04); font-size:0.82em; color:#10b981;">✅ 统计窗口内未发现技能使用缺口</div>`;
+
+      container.innerHTML = `
+        ${summaryCards}
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:12px;">
+          <div style="padding:12px; border-radius:10px; border:1px solid rgba(59,130,246,0.18); background:rgba(59,130,246,0.03);">
+            <div style="font-size:0.9em; font-weight:600; color:var(--text-primary); margin-bottom:8px;">📘 技能说明读取</div>
+            ${renderList(reads, '暂无读取记录')}
+          </div>
+          <div style="padding:12px; border-radius:10px; border:1px solid rgba(139,92,246,0.18); background:rgba(139,92,246,0.03);">
+            <div style="font-size:0.9em; font-weight:600; color:var(--text-primary); margin-bottom:8px;">⚙️ 技能实际执行</div>
+            ${renderList(execs, '暂无执行记录')}
+          </div>
+        </div>
+        ${findingsHtml}
+      `;
+
+      if (window.uiEnhancements && window.uiEnhancements.layoutMasonry) {
+        window.uiEnhancements.layoutMasonry();
+      }
+    } catch (error) {
+      console.error('更新技能使用统计失败:', error);
+      container.innerHTML = '<div class="empty-state" style="color: var(--error);">加载技能统计失败</div>';
     }
   }
 

@@ -523,6 +523,11 @@ mark {
     min-height: 260px;
 }
 
+/* 技能统计卡片不强制超高，避免与其他卡片间距观感不一致 */
+.card[data-card-id="skills-usage"] {
+    min-height: 260px;
+}
+
 .card::before {
     content: '';
     position: absolute;
@@ -1953,6 +1958,155 @@ mark {
 
 .card-header {
     cursor: move;
+}
+
+/* ===== 系统概览 + Agent 架构 响应式修复 ===== */
+.so-metric-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.so-metric-card {
+    padding: 14px;
+    border-radius: 10px;
+    text-align: center;
+    min-width: 0;
+}
+
+.so-details-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(240px, 1fr));
+    gap: 8px;
+}
+
+.so-detail-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    min-width: 0;
+}
+
+.agent-main-head {
+    display: grid;
+    grid-template-columns: minmax(240px, 1fr) minmax(320px, auto);
+    gap: 14px;
+    align-items: center;
+}
+
+.agent-main-metas {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(68px, auto));
+    gap: 12px;
+    align-items: center;
+    justify-content: end;
+}
+
+.agent-meta-item {
+    min-width: 0;
+}
+
+.agent-status-chip {
+    white-space: nowrap;
+}
+
+.agent-subagent-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+}
+
+.agent-subagent-card {
+    width: 100% !important;
+    min-width: 0;
+}
+
+@media (max-width: 1400px) {
+    .agent-main-head {
+        grid-template-columns: 1fr !important;
+    }
+
+    .agent-main-metas {
+        grid-template-columns: repeat(2, minmax(120px, 1fr)) !important;
+        justify-content: stretch !important;
+    }
+
+    .agent-meta-model {
+        grid-column: 1 / -1;
+    }
+}
+
+@media (max-width: 1180px) {
+    .so-metric-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+
+    .so-details-grid {
+        grid-template-columns: 1fr !important;
+    }
+}
+
+@media (max-width: 640px) {
+    .so-metric-grid,
+    .agent-main-metas,
+    .agent-subagent-list {
+        grid-template-columns: 1fr !important;
+    }
+}
+
+/* ===== 桌面主内容区：两列 1:3（不含右侧边栏） ===== */
+@media (min-width: 1200px) {
+    .main-content-area .grid {
+        grid-template-columns: minmax(280px, 1fr) minmax(0, 3fr) !important;
+        gap: 16px;
+    }
+
+    /* 左列 */
+    .main-content-area .card[data-card-id="system-overview"] {
+        grid-column: 1;
+        grid-row: 1;
+    }
+
+    .main-content-area .card[data-card-id="current-tasks"] {
+        grid-column: 1;
+        grid-row: 2;
+    }
+
+    .main-content-area .card[data-card-id="task-history"] {
+        grid-column: 1;
+        grid-row: 3;
+    }
+
+    /* 右列 */
+    .main-content-area .card[data-card-id="agents"] {
+        grid-column: 2;
+        grid-row: 1;
+    }
+
+    .main-content-area .card[data-card-id="model-usage"] {
+        grid-column: 2;
+        grid-row: 2;
+    }
+
+    .main-content-area .card[data-card-id="skills-usage"] {
+        grid-column: 2;
+        grid-row: 3;
+    }
+
+    .main-content-area .card[data-card-id="models-quota"] {
+        grid-column: 2;
+        grid-row: 4;
+    }
+
+    /* 覆盖宽卡默认跨列行为 */
+    .main-content-area .card.card-wide,
+    .main-content-area .card.priority-2,
+    .main-content-area .card.full-width {
+        grid-column: auto;
+    }
 }
 
 /* ===== 自适应排版优化（不改视觉风格） ===== */

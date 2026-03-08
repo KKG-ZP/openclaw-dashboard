@@ -394,9 +394,16 @@ class UIEnhancements {
     const grid = document.querySelector('.grid');
     if (!grid || !this._masonryEnabled) return;
 
-    // 平板/手机关闭瀑布流，回退到自然流式布局，避免移动端监控信息错位
+    // 平板/手机关闭瀑布流，回退自然流
     if (window.matchMedia('(max-width: 1024px)').matches) {
       this._disableMasonryLayout(grid);
+      return;
+    }
+
+    // 桌面大屏：固定两列(1:3)，左右列独立高度流，不互相对齐
+    if (window.matchMedia('(min-width: 1200px)').matches) {
+      this._enableMasonryLayout(grid);
+      this._layoutDesktopTwoColumn(grid);
       return;
     }
 
@@ -457,6 +464,73 @@ class UIEnhancements {
     grid.style.height = Math.max(...colHeights, 0) + 'px';
   }
 
+  _layoutDesktopTwoColumn(grid) {
+    const containerWidth = grid.clientWidth;
+    if (containerWidth <= 0) return;
+
+    const gapX = 16;
+    const rightGapY = 16;
+    const leftGapY = 16; // 左右列纵向间距一致
+
+    const leftW = Math.max(260, (containerWidth - gapX) * 0.25);
+    const rightW = Math.max(0, containerWidth - gapX - leftW);
+
+    const byId = (id) => grid.querySelector(`:scope > .card[data-card-id="${id}"]`);
+    const leftCards = [
+      byId('system-overview'),
+      byId('current-tasks'),
+      byId('task-history')
+    ].filter(Boolean);
+    const rightCards = [
+      byId('agents'),
+      byId('model-usage'),
+      byId('skills-usage'),
+      byId('models-quota')
+    ].filter(Boolean);
+
+    const allCards = Array.from(grid.querySelectorAll(':scope > .card[data-card-id]'));
+    let leftTop = 0;
+    let rightTop = 0;
+
+    // 先清理可能残留的样式
+    allCards.forEach(card => {
+      card.style.height = 'auto';
+      card.style.gridColumn = 'auto';
+      card.style.gridRow = 'auto';
+    });
+
+    // 左列：无缝堆叠
+    leftCards.forEach((card, idx) => {
+      card.style.width = `${leftW}px`;
+      card.style.left = '0px';
+      card.style.top = `${leftTop}px`;
+      leftTop += card.offsetHeight + (idx < leftCards.length - 1 ? leftGapY : 0);
+      this._lastCardWidths.set(card, { w: leftW, h: card.offsetHeight });
+    });
+
+    // 右列：常规间距
+    rightCards.forEach((card, idx) => {
+      card.style.width = `${rightW}px`;
+      card.style.left = `${leftW + gapX}px`;
+      card.style.top = `${rightTop}px`;
+      rightTop += card.offsetHeight + (idx < rightCards.length - 1 ? rightGapY : 0);
+      this._lastCardWidths.set(card, { w: rightW, h: card.offsetHeight });
+    });
+
+    // 兜底：未在映射中的卡片放到右列末尾
+    const mapped = new Set([...leftCards, ...rightCards]);
+    allCards.forEach(card => {
+      if (mapped.has(card)) return;
+      card.style.width = `${rightW}px`;
+      card.style.left = `${leftW + gapX}px`;
+      card.style.top = `${rightTop}px`;
+      rightTop += card.offsetHeight + rightGapY;
+      this._lastCardWidths.set(card, { w: rightW, h: card.offsetHeight });
+    });
+
+    grid.style.height = `${Math.max(leftTop, rightTop)}px`;
+  }
+
   _disableMasonryLayout(grid) {
     grid.classList.remove('masonry-active', 'masonry-no-transition', 'is-dragging');
     grid.classList.add('masonry-disabled');
@@ -489,7 +563,7 @@ class UIEnhancements {
 
   _onMouseDown(e, card, grid) {
     if (e.button !== 0) return;
-    if (window.matchMedia('(max-width: 1024px)').matches) return;
+    if (window.matchMedia('(max-width: 1024px), (min-width: 1200px)').matches) return;
     if (e.target.closest('input, select, button, textarea, a, .search-input, .btn-small')) return;
     e.preventDefault();
 
@@ -649,10 +723,31 @@ class UIEnhancements {
       grid.querySelectorAll(':scope > .card[data-card-id]').forEach(c => {
         cardMap[c.dataset.cardId] = c;
       });
+
+      const appended = new Set();
+
+      // 先按旧顺序恢复已存在卡片
       order.forEach(id => {
         const c = cardMap[id];
-        if (c) grid.appendChild(c);
+        if (c) {
+          grid.appendChild(c);
+          appended.add(id);
+        }
       });
+
+      // 再补上新增卡片（旧布局里没有的），避免出现“间隙不一致/位置异常”
+      grid.querySelectorAll(':scope > .card[data-card-id]').forEach(c => {
+        const id = c.dataset.cardId;
+        if (!appended.has(id)) {
+          grid.appendChild(c);
+          appended.add(id);
+        }
+      });
+
+      // 若检测到布局缺失新卡片，自动写回一次，避免下次重复异常
+      if (appended.size !== order.length) {
+        this.saveLayout();
+      }
     } catch (err) {
       console.error('加载布局失败:', err);
     }

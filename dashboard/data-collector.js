@@ -24,10 +24,22 @@ class DataCollector {
       tasks: null,
       channels: null,
       models: null,
-      health: null
+      health: null,
+      logs: null,
+      dashboardSnapshot: null
     };
-    this.cacheTimeout = 2000; // 缓存2秒
+    this.cacheTimeout = 5000; // 默认缓存5秒，降低重复采集压力
+    this.cacheTimeouts = {
+      system: 5000,
+      agents: 5000,
+      tasks: 5000,
+      channels: 5000,
+      health: 5000,
+      logs: 5000,
+      dashboardSnapshot: 5000
+    };
     this.cacheTimestamps = {};
+    this.pendingSnapshotPromise = null;
     this.initDataDir();
   }
 
@@ -59,7 +71,8 @@ class DataCollector {
   _isCacheValid(key) {
     if (!this.cache[key] || !this.cacheTimestamps[key]) return false;
     const age = Date.now() - this.cacheTimestamps[key];
-    return age < this.cacheTimeout;
+    const timeout = this.cacheTimeouts[key] || this.cacheTimeout;
+    return age < timeout;
   }
 
   // 设置缓存
@@ -120,36 +133,139 @@ class DataCollector {
     }
   }
 
+  normalizeProcessCpuPercent(rawCpu) {
+    const cpuValue = Number.parseFloat(rawCpu);
+    const cpuCores = Math.max(os.cpus()?.length || 1, 1);
+
+    if (!Number.isFinite(cpuValue) || cpuValue <= 0) {
+      return 0;
+    }
+
+    const normalized = cpuValue / cpuCores;
+    return Math.min(100, Math.max(0, normalized));
+  }
+
   // 获取进程信息
   async getProcessInfo(processName) {
     try {
-      const { stdout } = await execAsync(`ps aux | grep "${processName}" | grep -v grep`);
-      const lines = stdout.trim().split('\n');
-      if (lines.length === 0) return null;
-      
-      // 解析ps输出
-      const parts = lines[0].trim().split(/\s+/);
-      if (parts.length < 11) return null;
-      
+      // Linux ps comm 默认最多 15 字符，按 comm 精确匹配可避免误命中包装 shell
+      const commName = processName.slice(0, 15);
+      const { stdout } = await execAsync(`ps -eo pid=,comm=,%cpu=,rss=,args= | awk '$2 == "${commName}" { print; }' | tail -n 1`);
+      const line = stdout.trim();
+      if (!line) return null;
+
+      const parts = line.split(/\s+/);
+      if (parts.length < 5) return null;
+
+      const normalizedCpu = this.normalizeProcessCpuPercent(parts[2]);
+
       return {
-        pid: parts[1],
-        cpu: parts[2] + '%',
-        memory: parts[5] + ' KB',
-        command: parts.slice(10).join(' ')
+        pid: parts[0],
+        cpu: normalizedCpu.toFixed(1) + '%',
+        memory: parts[3] + ' KB',
+        command: parts.slice(4).join(' ')
       };
     } catch (error) {
       return null;
     }
   }
 
+  async getDashboardSnapshot(force = false) {
+    if (!force && this._isCacheValid('dashboardSnapshot')) {
+      return this.cache.dashboardSnapshot;
+    }
+
+    if (!force && this.pendingSnapshotPromise) {
+      return this.pendingSnapshotPromise;
+    }
+
+    this.pendingSnapshotPromise = (async () => {
+      try {
+        const system = await this.getSystemOverview();
+        const agents = await this.getAgentsList();
+        const tasks = await this.getTasks();
+        const channels = await this.getChannelsStatus();
+        const logs = await this.getRecentLogs(100);
+
+        let score = 100;
+        const issues = [];
+
+        if (system.gateway.status !== 'running') {
+          score -= 30;
+          issues.push({ type: 'critical', message: 'Gateway进程未运行' });
+        }
+
+        const failedChannels = channels.filter(c => c.status === 'warning' && c.enabled);
+        if (failedChannels.length > 0) {
+          score -= failedChannels.length * 10;
+          issues.push({
+            type: 'warning',
+            message: `${failedChannels.length}个通道状态异常`
+          });
+        }
+
+        const recentErrors = logs.filter(l => l.level === 'error').length;
+        if (recentErrors > 10) {
+          score -= 20;
+          issues.push({
+            type: 'warning',
+            message: `最近有${recentErrors}条错误日志`
+          });
+        }
+
+        const inactiveAgents = agents.filter(a => a.status === 'unknown');
+        if (inactiveAgents.length > 0) {
+          score -= inactiveAgents.length * 5;
+        }
+
+        score = Math.max(0, score);
+
+        let status = 'healthy';
+        if (score < 50) status = 'critical';
+        else if (score < 80) status = 'warning';
+
+        const health = { score, status, issues };
+        this._setCache('health', health);
+
+        const snapshot = {
+          timestamp: new Date().toISOString(),
+          system,
+          agents,
+          tasks,
+          channels,
+          logs,
+          health
+        };
+
+        this._setCache('dashboardSnapshot', snapshot);
+        return snapshot;
+      } finally {
+        this.pendingSnapshotPromise = null;
+      }
+    })();
+
+    return this.pendingSnapshotPromise;
+  }
+
   // 获取所有Agent列表和状态（含磁盘上发现的子agent）
   async getAgentsList() {
+    if (this._isCacheValid('agents')) {
+      return this.cache.agents;
+    }
     const config = await this.getConfig();
     const configList = (config && config.agents && config.agents.list) ? config.agents.list : [];
 
-    // 岗位映射（根据 agent id 或配置中的 role 字段）
+    // 岗位映射（优先官方 identity.theme，其次兼容旧 identity.role，最后按 id 映射）
     const roleMap = {
-      'main': '总管理',
+      'main': '司礼监',
+      'bingbu-agent': '兵部尚书',
+      'hanlinyuan-agent': '翰林学士',
+      'guozijian-agent': '国子监祭酒',
+      'hubu-agent': '户部尚书',
+      'libu-agent': '礼部尚书',
+      'gongbu-agent': '工部尚书',
+      'xingbu-agent': '刑部尚书',
+      'duchayuan-agent': '都御史',
       'assistant': '助理',
       'system-engineer': '系统工程师',
       'health-expert': '健康顾问',
@@ -174,11 +290,11 @@ class DataCollector {
       
       const defaultModel = agentConfig.model?.primary || config.agents.defaults?.model?.primary || 'N/A';
       const currentModel = status.currentModel || defaultModel;
-      const role = agentConfig.identity?.role || roleMap[agentId] || '通用助手';
+      const role = agentConfig.identity?.theme || agentConfig.identity?.role || roleMap[agentId] || '通用助手';
       
       agents.push({
         id: agentId,
-        name: agentConfig.identity?.name || agentId,
+        name: agentConfig.identity?.name || agentConfig.name || agentId,
         emoji: agentConfig.identity?.emoji || '🤖',
         role: role,
         model: currentModel,
@@ -211,11 +327,11 @@ class DataCollector {
 
         // 尝试从 configs 对象获取补充信息
         const cfgExtra = config?.agents?.configs?.[dirName] || {};
-        const role = cfgExtra.identity?.role || roleMap[dirName] || '子Agent';
+        const role = cfgExtra.identity?.theme || cfgExtra.identity?.role || roleMap[dirName] || '子Agent';
 
         agents.push({
           id: dirName,
-          name: cfgExtra.identity?.name || dirName,
+          name: cfgExtra.identity?.name || cfgExtra.name || dirName,
           emoji: cfgExtra.identity?.emoji || '🧩',
           role: role,
           model: status.currentModel || cfgExtra.model?.primary || 'N/A',
@@ -232,6 +348,7 @@ class DataCollector {
       console.error('扫描agents目录发现子agent失败:', error);
     }
     
+    this._setCache('agents', agents);
     return agents;
   }
 
@@ -386,6 +503,10 @@ class DataCollector {
 
   // 获取任务列表
   async getTasks() {
+    if (this._isCacheValid('tasks')) {
+      return this.cache.tasks;
+    }
+
     const agents = await this.getAgentsList();
     const tasks = {
       current: [],
@@ -470,11 +591,16 @@ class DataCollector {
     tasks.history.sort((a, b) => new Date(b.lastUpdate) - new Date(a.lastUpdate));
     tasks.history = tasks.history.slice(0, 20); // 只保留最近20条历史
 
+    this._setCache('tasks', tasks);
     return tasks;
   }
 
   // 获取通道状态
   async getChannelsStatus() {
+    if (this._isCacheValid('channels')) {
+      return this.cache.channels;
+    }
+
     const config = await this.getConfig();
     if (!config || !config.channels) {
       return [];
@@ -499,6 +625,7 @@ class DataCollector {
       });
     }
 
+    this._setCache('channels', channels);
     return channels;
   }
 
@@ -869,6 +996,10 @@ class DataCollector {
 
   // 获取最近日志（优化：只读取文件末尾）
   async getRecentLogs(count = 50) {
+    if (count <= 100 && this._isCacheValid('logs')) {
+      return this.cache.logs.slice(0, count);
+    }
+
     try {
       const logFile = path.join(LOGS_DIR, 'gateway.err.log');
       const stats = await fs.stat(logFile).catch(() => null);
@@ -902,6 +1033,9 @@ class DataCollector {
         };
       });
       
+      if (count <= 100) {
+        this._setCache('logs', logs);
+      }
       return logs;
     } catch (error) {
       console.error('读取日志失败:', error);
@@ -911,57 +1045,12 @@ class DataCollector {
 
   // 获取系统健康度
   async getHealthStatus() {
-    const systemOverview = await this.getSystemOverview();
-    const agents = await this.getAgentsList();
-    const channels = await this.getChannelsStatus();
-    const logs = await this.getRecentLogs(100);
-    
-    let score = 100;
-    const issues = [];
-    
-    // 检查Gateway状态
-    if (systemOverview.gateway.status !== 'running') {
-      score -= 30;
-      issues.push({ type: 'critical', message: 'Gateway进程未运行' });
+    if (this._isCacheValid('health')) {
+      return this.cache.health;
     }
-    
-    // 检查通道状态
-    const failedChannels = channels.filter(c => c.status === 'warning' && c.enabled);
-    if (failedChannels.length > 0) {
-      score -= failedChannels.length * 10;
-      issues.push({
-        type: 'warning',
-        message: `${failedChannels.length}个通道状态异常`
-      });
-    }
-    
-    // 检查错误日志
-    const recentErrors = logs.filter(l => l.level === 'error').length;
-    if (recentErrors > 10) {
-      score -= 20;
-      issues.push({
-        type: 'warning',
-        message: `最近有${recentErrors}条错误日志`
-      });
-    }
-    
-    // 检查Agent状态
-    const inactiveAgents = agents.filter(a => a.status === 'unknown');
-    if (inactiveAgents.length > 0) {
-      score -= inactiveAgents.length * 5;
-    }
-    
-    score = Math.max(0, score);
-    
-    let status = 'healthy';
-    if (score < 50) status = 'critical';
-    else if (score < 80) status = 'warning';
-    
-    return {
-      score,
-      status,
-      issues
-    };
+
+    const snapshot = await this.getDashboardSnapshot();
+    return snapshot.health;
   }
 
   // 清除配置缓存
@@ -972,6 +1061,7 @@ class DataCollector {
       this.cache[key] = null;
       this.cacheTimestamps[key] = 0;
     });
+    this.pendingSnapshotPromise = null;
   }
 
   // ========== 历史数据采集和存储 ==========
@@ -1654,15 +1744,20 @@ class DataCollector {
       // 合并信息来源：agentConfig（list）> cfgExtra（configs）> 默认值
       const defaults = config?.agents?.defaults || {};
       const roleMap = {
-        'main': '总管理', 'assistant': '助理', 'system-engineer': '系统工程师',
-        'health-expert': '健康顾问', 'coder': '程序员', 'designer': '设计师',
-        'writer': '文案', 'analyst': '分析师', 'tester': '测试工程师', 'devops': '运维工程师'
+        'main': '司礼监', 'bingbu-agent': '兵部尚书', 'hanlinyuan-agent': '翰林学士',
+        'guozijian-agent': '国子监祭酒', 'hubu-agent': '户部尚书', 'libu-agent': '礼部尚书',
+        'gongbu-agent': '工部尚书', 'xingbu-agent': '刑部尚书', 'duchayuan-agent': '都御史',
+        'assistant': '助理', 'system-engineer': '系统工程师', 'health-expert': '健康顾问',
+        'coder': '程序员', 'designer': '设计师', 'writer': '文案', 'analyst': '分析师',
+        'tester': '测试工程师', 'devops': '运维工程师'
       };
+      const role = agentConfig?.identity?.theme || agentConfig?.identity?.role || cfgExtra.identity?.theme || cfgExtra.identity?.role || roleMap[agentId] || '通用助手';
 
       return {
         id: agentId,
-        name: agentConfig?.identity?.name || cfgExtra.identity?.name || agentId,
+        name: agentConfig?.identity?.name || agentConfig?.name || cfgExtra.identity?.name || cfgExtra.name || agentId,
         emoji: agentConfig?.identity?.emoji || cfgExtra.identity?.emoji || '🧩',
+        role: role,
         model: agentConfig?.model?.primary || cfgExtra.model?.primary || defaults.model?.primary || 'N/A',
         workspace: agentConfig?.workspace || cfgExtra.workspace || defaults.workspace || 'N/A',
         subagents: agentConfig?.subagents?.allowAgents || [],
@@ -1691,23 +1786,29 @@ class DataCollector {
       const content = await fs.readFile(sessionFile, 'utf-8');
       const lines = content.trim().split('\n').filter(l => l);
       
-      // 获取 agent 配置信息
+      // 获取 agent 配置信息（list 优先，configs 次之）
       let agentName = agentId;
       let agentEmoji = '🤖';
       let agentRole = '助手';
       try {
         const config = JSON.parse(await fs.readFile(CONFIG_FILE, 'utf-8'));
-        const agentConfig = config.agents?.configs?.[agentId] || {};
-        agentName = agentConfig.identity?.name || agentId;
-        agentEmoji = agentConfig.identity?.emoji || '🤖';
-        
-        // 角色映射
+        const configList = Array.isArray(config?.agents?.list) ? config.agents.list : [];
+        const listItem = configList.find(a => a?.id === agentId) || {};
+        const cfgExtra = config?.agents?.configs?.[agentId] || {};
+
+        agentName = listItem.identity?.name || listItem.name || cfgExtra.identity?.name || cfgExtra.name || agentId;
+        agentEmoji = listItem.identity?.emoji || cfgExtra.identity?.emoji || '🤖';
+
+        // 角色映射（优先官方 identity.theme）
         const roleMap = {
-          'main': '总管理', 'assistant': '助理', 'system-engineer': '系统工程师',
-          'health-expert': '健康顾问', 'coder': '程序员', 'designer': '设计师',
-          'writer': '文案', 'analyst': '分析师', 'tester': '测试工程师', 'devops': '运维工程师'
+          'main': '司礼监', 'bingbu-agent': '兵部尚书', 'hanlinyuan-agent': '翰林学士',
+          'guozijian-agent': '国子监祭酒', 'hubu-agent': '户部尚书', 'libu-agent': '礼部尚书',
+          'gongbu-agent': '工部尚书', 'xingbu-agent': '刑部尚书', 'duchayuan-agent': '都御史',
+          'assistant': '助理', 'system-engineer': '系统工程师', 'health-expert': '健康顾问',
+          'coder': '程序员', 'designer': '设计师', 'writer': '文案', 'analyst': '分析师',
+          'tester': '测试工程师', 'devops': '运维工程师'
         };
-        agentRole = agentConfig.identity?.role || roleMap[agentId] || '助手';
+        agentRole = listItem.identity?.theme || listItem.identity?.role || cfgExtra.identity?.theme || cfgExtra.identity?.role || roleMap[agentId] || '助手';
       } catch (e) {
         // 使用默认值
       }
@@ -1941,6 +2042,198 @@ class DataCollector {
       console.error('获取任务详情失败:', error);
       throw error;
     }
+  }
+  // ========== 技能使用统计（Skill Usage） ==========
+
+  _skillUsageCache = null;
+  _skillUsageCacheTime = 0;
+
+  async getSkillUsageStats(days = null) {
+    const d = Number(days);
+    const normalizedDays = Number.isFinite(d) && d > 0 ? d : null;
+    const cacheKey = `days_${normalizedDays || 'all'}`;
+    const now = Date.now();
+
+    // 缓存30秒，避免频繁全量扫描 session 文件
+    if (this._skillUsageCache && this._skillUsageCache._key === cacheKey && this._skillUsageCacheTime > now - 30000) {
+      return this._skillUsageCache;
+    }
+
+    const stats = await this.collectSkillUsageStats(normalizedDays);
+    stats._key = cacheKey;
+    this._skillUsageCache = stats;
+    this._skillUsageCacheTime = now;
+    return stats;
+  }
+
+  async collectSkillUsageStats(days = null) {
+    const cutoffTime = days ? (Date.now() - days * 24 * 60 * 60 * 1000) : null;
+
+    const toolCallCounts = {};
+    const skillReadCounts = {};
+    const skillExecCounts = {};
+    const skillReadExamples = {};
+    const skillExecExamples = {};
+
+    const inc = (obj, key, n = 1) => {
+      obj[key] = (obj[key] || 0) + n;
+    };
+
+    const pushExample = (obj, key, sample, max = 3) => {
+      if (!obj[key]) obj[key] = [];
+      if (obj[key].length < max) obj[key].push(sample);
+    };
+
+    const mapSkillName = (raw) => {
+      if (!raw) return 'unknown';
+      const name = String(raw).trim();
+      if (name === 'tavily-search') return 'tavily';
+      if (name === 'agent-browser') return 'Agent Browser';
+      return name;
+    };
+
+    const skillExecPatterns = [
+      { skill: 'tavily', regex: /skills\/tavily-search\/scripts\/(search|extract)\.mjs|api\.tavily\.com/i },
+      { skill: 'summarize', regex: /(^|\n)\s*summarize\s+["']/i },
+      { skill: 'weather', regex: /wttr\.in\/|open-meteo\.com/i },
+      { skill: 'Agent Browser', regex: /(^|\n)\s*(agent-browser|npx\s+agent-browser)\b/i },
+      { skill: 'ontology', regex: /skills\/ontology\/scripts\/ontology\.py|memory\/ontology/i }
+    ];
+
+    let totalAssistantMessages = 0;
+    let totalToolCalls = 0;
+
+    const agentDirs = await fs.readdir(AGENTS_DIR).catch(() => []);
+    for (const agentId of agentDirs) {
+      const sessionsDir = path.join(AGENTS_DIR, agentId, 'sessions');
+      const sessionDirStat = await fs.stat(sessionsDir).catch(() => null);
+      if (!sessionDirStat || !sessionDirStat.isDirectory()) continue;
+
+      const files = await fs.readdir(sessionsDir).catch(() => []);
+      const sessionFiles = files.filter(f => (f.endsWith('.jsonl') || f.includes('.jsonl.reset.')) && !f.includes('.deleted.'));
+
+      for (const file of sessionFiles) {
+        const filePath = path.join(sessionsDir, file);
+        const content = await fs.readFile(filePath, 'utf-8').catch(() => '');
+        if (!content) continue;
+
+        const lines = content.trim().split('\n').filter(Boolean);
+        for (const line of lines) {
+          let entry;
+          try {
+            entry = JSON.parse(line);
+          } catch (e) {
+            continue;
+          }
+
+          if (entry.type !== 'message' || !entry.message || entry.message.role !== 'assistant') continue;
+
+          const ts = entry.timestamp ? new Date(entry.timestamp).getTime() : null;
+          if (cutoffTime && ts && ts < cutoffTime) continue;
+
+          totalAssistantMessages++;
+
+          const blocks = Array.isArray(entry.message.content) ? entry.message.content : [];
+          for (const block of blocks) {
+            if (block.type !== 'toolCall') continue;
+
+            const toolName = block.name || 'unknown';
+            inc(toolCallCounts, toolName);
+            totalToolCalls++;
+
+            const args = block.arguments || {};
+
+            // 统计 SKILL.md 读取
+            if (toolName === 'read') {
+              const p = args.file_path || args.path;
+              if (typeof p === 'string') {
+                const m = p.match(/\/skills\/([^/]+)\/SKILL\.md$/);
+                if (m) {
+                  const skill = mapSkillName(m[1]);
+                  inc(skillReadCounts, skill);
+                  pushExample(skillReadExamples, skill, {
+                    agentId,
+                    timestamp: entry.timestamp || null,
+                    path: p
+                  });
+                }
+              }
+            }
+
+            // 统计 skill 执行命令
+            if (toolName === 'exec') {
+              const cmd = typeof args.command === 'string' ? args.command : '';
+              if (!cmd) continue;
+
+              // 排除 python heredoc（常用于审计脚本本身，容易造成假阳性）
+              const trimmed = cmd.trimStart();
+              if (trimmed.startsWith("python - <<") || trimmed.startsWith("python3 - <<")) {
+                continue;
+              }
+
+              for (const { skill, regex } of skillExecPatterns) {
+                if (regex.test(cmd)) {
+                  inc(skillExecCounts, skill);
+                  pushExample(skillExecExamples, skill, {
+                    agentId,
+                    timestamp: entry.timestamp || null,
+                    command: cmd.split('\n')[0].slice(0, 220)
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 可用技能列表（workspace/skills 下且非 .disabled_）
+    let enabledSkills = [];
+    try {
+      const skillDir = path.join(OPENCLAW_HOME, 'workspace', 'skills');
+      const dirs = await fs.readdir(skillDir).catch(() => []);
+      enabledSkills = dirs.filter(d => !d.startsWith('.disabled_')).map(mapSkillName).sort();
+    } catch (e) {
+      enabledSkills = [];
+    }
+
+    const toSortedArray = (obj) => Object.entries(obj)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+
+    const execCalls = toolCallCounts.exec || 0;
+    const totalSkillExecs = Object.values(skillExecCounts).reduce((s, n) => s + n, 0);
+    const execSkillUsageRate = execCalls > 0 ? Number(((totalSkillExecs / execCalls) * 100).toFixed(1)) : 0;
+
+    const trackedCoreSkills = ['tavily', 'summarize', 'weather', 'Agent Browser', 'ontology'];
+    const findings = [];
+    for (const sk of trackedCoreSkills) {
+      if ((skillExecCounts[sk] || 0) === 0) {
+        findings.push(`技能 ${sk} 在统计窗口内无执行记录`);
+      }
+    }
+
+    return {
+      timestamp: new Date().toISOString(),
+      rangeDays: days,
+      summary: {
+        totalAssistantMessages,
+        totalToolCalls,
+        execCalls,
+        skillReads: Object.values(skillReadCounts).reduce((s, n) => s + n, 0),
+        skillExecs: totalSkillExecs,
+        execSkillUsageRate
+      },
+      enabledSkills,
+      toolCalls: toSortedArray(toolCallCounts),
+      skillReads: toSortedArray(skillReadCounts),
+      skillExecs: toSortedArray(skillExecCounts),
+      examples: {
+        reads: skillReadExamples,
+        execs: skillExecExamples
+      },
+      findings
+    };
   }
 }
 

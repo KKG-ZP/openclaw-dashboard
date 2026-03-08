@@ -15,10 +15,17 @@ const execAsync = promisify(exec);
 const fs = require('fs');
 const fsPromises = require('fs').promises;
 const osUtils = require('node-os-utils');
+const { createProxyMiddleware, fixRequestBody } = require('http-proxy-middleware');
 
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
+const sockets = new Set();
+
+server.on('connection', (socket) => {
+  sockets.add(socket);
+  socket.on('close', () => sockets.delete(socket));
+});
 
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '127.0.0.1';
@@ -37,6 +44,61 @@ console.log('CSS文件存在:', fs.existsSync(path.join(staticDir, 'css', 'style
 // 中间件
 app.use(cors());
 app.use(express.json());
+
+// 多工具统一入口路由
+const toolboxStaticDir = process.env.TOOLBOX_STATIC_DIR || path.join(require('os').homedir(), 'toolbox-static', 'toolbox');
+console.log('工具箱静态目录:', toolboxStaticDir, '存在:', fs.existsSync(toolboxStaticDir));
+
+// toolbox-auth 反向代理
+app.use('/toolbox/auth', createProxyMiddleware({
+  target: 'http://127.0.0.1:44131',
+  changeOrigin: false,
+  proxyTimeout: 10000,
+  timeout: 10000,
+  on: {
+    proxyReq: fixRequestBody,
+  },
+}));
+
+// 文渊文件台反向代理（/wenyuan -> 45133）
+app.use('/wenyuan', createProxyMiddleware({
+  target: 'http://127.0.0.1:45133',
+  changeOrigin: false,
+  proxyTimeout: 15000,
+  timeout: 15000,
+  on: {
+    proxyReq: fixRequestBody,
+  },
+  pathRewrite: (pathReq) => {
+    const rewritten = pathReq.replace(/^\/wenyuan/, '');
+    return rewritten || '/';
+  },
+}));
+
+// 基金系统反向代理（/fund -> 44130）
+app.use('/fund', createProxyMiddleware({
+  target: 'http://127.0.0.1:44130',
+  changeOrigin: false,
+  proxyTimeout: 15000,
+  timeout: 15000,
+  on: {
+    proxyReq: fixRequestBody,
+  },
+  pathRewrite: (pathReq) => {
+    const rewritten = pathReq.replace(/^\/fund/, '');
+    return rewritten || '/';
+  },
+}));
+
+// 兼容旧入口：/toolbox/dashboard/* -> /dashboard/*
+app.use('/toolbox/dashboard', (req, res) => {
+  const suffix = req.originalUrl.replace(/^\/toolbox\/dashboard/, '') || '/';
+  const normalized = suffix.startsWith('/') ? suffix : `/${suffix}`;
+  return res.redirect(302, `/dashboard${normalized === '/' ? '/' : normalized}`);
+});
+
+// 工具箱静态页（登录页/卡片页）
+app.use('/toolbox', express.static(toolboxStaticDir, { index: ['index.html'] }));
 
 // 静态文件服务 - 必须在所有API路由之前
 // 调试：记录静态文件请求（必须在静态文件服务之前）
@@ -60,6 +122,8 @@ app.use('/static', express.static(staticDir));
 
 // WebSocket客户端管理
 const clients = new Set();
+let isShuttingDown = false;
+const SHUTDOWN_GRACE_MS = parseInt(process.env.SHUTDOWN_GRACE_MS || '8000', 10);
 
 wss.on('connection', (ws) => {
   clients.add(ws);
@@ -89,15 +153,11 @@ function broadcast(data) {
 let updateInterval;
 function startPeriodicUpdates() {
   updateInterval = setInterval(async () => {
+    if (isShuttingDown) return;
+
     try {
-      // 并行获取所有数据以提高性能
-      const [system, agents, tasks, channels, health] = await Promise.all([
-        collector.getSystemOverview(),
-        collector.getAgentsList(),
-        collector.getTasks(),
-        collector.getChannelsStatus(),
-        collector.getHealthStatus()
-      ]);
+      const snapshot = await collector.getDashboardSnapshot();
+      const { system, agents, tasks, channels, health, logs: recentLogs } = snapshot;
 
       // 检查告警
       const gatewayInfo = await collector.getProcessInfo('openclaw-gateway');
@@ -115,8 +175,7 @@ function startPeriodicUpdates() {
         memoryPercent = memoryMB > 0 ? (memoryMB / 1024) * 10 : 0;
       }
 
-      // 获取错误率（从最近日志中）
-      const recentLogs = await collector.getRecentLogs(100);
+      // 获取错误率（从共享快照中）
       const errorCount = recentLogs.filter(log => log.level === 'error').length;
       const errorRate = recentLogs.length > 0 ? (errorCount / recentLogs.length) * 100 : 0;
 
@@ -179,14 +238,17 @@ configWatcher.on('change', () => {
   collector.clearCache();
   // 立即推送更新
   setTimeout(async () => {
+    if (isShuttingDown) return;
+
     try {
+      const snapshot = await collector.getDashboardSnapshot(true);
       const data = {
         type: 'config-changed',
         timestamp: new Date().toISOString(),
         data: {
-          system: await collector.getSystemOverview(),
-          agents: await collector.getAgentsList(),
-          channels: await collector.getChannelsStatus()
+          system: snapshot.system,
+          agents: snapshot.agents,
+          channels: snapshot.channels
         }
       };
       broadcast(data);
@@ -301,7 +363,8 @@ app.get('/api/logs/recent', async (req, res) => {
 // 系统健康度
 app.get('/api/health', async (req, res) => {
   try {
-    const data = await collector.getHealthStatus();
+    const snapshot = await collector.getDashboardSnapshot();
+    const data = snapshot.health;
     res.json(data);
   } catch (error) {
     console.error('获取系统健康度失败:', error);
@@ -365,6 +428,19 @@ app.get('/api/models/usage', async (req, res) => {
     res.json(data);
   } catch (error) {
     console.error('获取模型使用量统计失败:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 技能使用统计（Skill-first执行情况）
+app.get('/api/skills/usage', async (req, res) => {
+  try {
+    const rawDays = req.query.days;
+    const days = rawDays === undefined || rawDays === '' ? null : parseInt(rawDays, 10);
+    const data = await collector.getSkillUsageStats(days);
+    res.json(data);
+  } catch (error) {
+    console.error('获取技能使用统计失败:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -1228,14 +1304,13 @@ app.get('/api/dashboard', async (req, res) => {
   }
 });
 
-// 首页 - 支持侧边栏布局切换
-app.get('/', (req, res) => {
+function sendDashboardPage(req, res) {
   const layout = req.query.layout || 'default'; // default 或 sidebar
   const htmlFile = layout === 'sidebar' ? 'index-sidebar.html' : 'index.html';
   const htmlPath = path.join(__dirname, htmlFile);
   res.sendFile(htmlPath, (err) => {
     if (err) {
-      console.error('发送首页失败:', err);
+      console.error('发送Dashboard页面失败:', err);
       res.status(500).send(`
         <h1>无法加载页面</h1>
         <p>错误: ${err.message}</p>
@@ -1243,7 +1318,22 @@ app.get('/', (req, res) => {
       `);
     }
   });
+}
+
+// 新入口：域名根路径是登录页
+app.get('/', (req, res) => {
+  const loginPath = path.join(toolboxStaticDir, 'login.html');
+  res.sendFile(loginPath, (err) => {
+    if (err) {
+      console.error('发送登录页失败:', err);
+      res.status(500).send('无法加载登录页');
+    }
+  });
 });
+
+// 作战中心固定入口
+app.get('/dashboard', sendDashboardPage);
+app.get('/dashboard/', sendDashboardPage);
 
 // 启动服务器
 server.listen(PORT, HOST, () => {
