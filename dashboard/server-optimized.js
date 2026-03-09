@@ -803,10 +803,26 @@ configWatcher.on('change', () => {
   }, 500);
 });
 
-// 页面路由
+// 页面路由 - B单优化版支持
 function sendDashboardPage(req, res) {
   const layout = req.query.layout || 'default';
-  const htmlFile = layout === 'sidebar' ? 'index-sidebar.html' : 'index.html';
+  let htmlFile;
+  
+  switch(layout) {
+    case 'optimized':
+      htmlFile = 'index-optimized.html';
+      break;
+    case 'optimized-v2':
+    case 'v2':
+      htmlFile = 'index-optimized-v2.html';
+      break;
+    case 'sidebar':
+      htmlFile = 'index-sidebar.html';
+      break;
+    default:
+      htmlFile = 'index.html';
+  }
+  
   const htmlPath = path.join(__dirname, htmlFile);
   res.sendFile(htmlPath, (err) => {
     if (err) {

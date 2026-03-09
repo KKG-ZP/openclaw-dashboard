@@ -1,0 +1,53 @@
+{
+  "timestamp": "2026-03-09T13:35:05.986Z",
+  "tasks": {
+    "C": {
+      "passed": [
+        "C1-Agent分页接口",
+        "C1-任务分页接口",
+        "C2-摘要数据量减少>30%",
+        "C3-日志分页接口"
+      ],
+      "failed": []
+    },
+    "D": {
+      "passed": [
+        "D1-增量接口",
+        "D2-响应压缩(未启用)",
+        "D3-ETag缓存"
+      ],
+      "failed": []
+    },
+    "E": {
+      "passed": [
+        "E1-指标历史接口",
+        "E1-模型使用统计",
+        "E2-index-optimized.html",
+        "E2-index-optimized-v2.html",
+        "E2-static/js/dashboard-optimized.js",
+        "E2-static/js/dashboard-optimized-v2.js"
+      ],
+      "failed": []
+    },
+    "G": {
+      "passed": [
+        "G1-/api/dashboard",
+        "G1-/api/dashboard/summary",
+        "G1-/api/system/overview",
+        "G1-/api/agents/list",
+        "G1-/api/tasks/current",
+        "G1-/api/health",
+        "G2-/static/css/style.css",
+        "G2-/static/js/dashboard-optimized-v2.js"
+      ],
+      "failed": []
+    }
+  },
+  "benchmark": {
+    "concurrency": {
+      "success": 10,
+      "totalTime": 20,
+      "avgTime": "13.0"
+    }
+  }
+}
