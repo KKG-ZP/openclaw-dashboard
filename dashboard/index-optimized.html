@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎩 OpenClaw 作战指挥中心</title>
+    
+    <!-- 预加载关键资源 -->
+    <link rel="preconnect" href="https://cdn.jsdelivr.net">
+    <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
+    
+    <!-- CSS 保持同步加载 -->
+    <link rel="stylesheet" href="/static/css/style.css?v=20260309-opt">
+    <link rel="stylesheet" href="/static/css/layout-improvements.css?v=20260309-opt">
+    <link rel="stylesheet" href="/static/css/right-sidebar.css?v=20260309-opt">
+    
+    <!-- Chart.js 改为异步加载 -->
+    <script>
+        // 配置对象，控制模块加载
+        window.APP_CONFIG = {
+            useSummaryAPI: true,      // 使用摘要接口
+            useDeltaUpdates: true,    // 使用增量更新
+            lazyLoadCharts: true,     // 懒加载图表
+            enablePagination: true,   // 启用分页
+            pageVisibilityOptimization: true, // 页面可见性优化
+            chartThrottleMs: 1000,    // 图表刷新节流
+            logUpdateThrottleMs: 2000 // 日志更新节流
+        };
+        
+        // 懒加载 Chart.js
+        window.loadChartJS = function() {
+            return new Promise((resolve, reject) => {
+                if (window.Chart) {
+                    resolve(window.Chart);
+                    return;
+                }
+                const script = document.createElement('script');
+                script.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js';
+                script.async = true;
+                script.onload = () => resolve(window.Chart);
+                script.onerror = reject;
+                document.head.appendChild(script);
+            });
+        };
+    </script>
+</head>
+<body>
+    <div class="container">
+        <!-- 顶部标题栏 -->
+        <header class="header">
+            <div class="header-left">
+                <h1>🎩 OpenClaw 作战指挥中心</h1>
+                <div class="subtitle" id="subtitle">系统状态监控面板</div>
+            </div>
+            <div class="header-right">
+                <!-- 全局搜索框 -->
+                <div class="global-search-container">
+                    <input type="text" id="globalSearch" class="global-search-input" placeholder="🔍 全局搜索...">
+                </div>
+                <div class="status-indicator" id="connectionStatus">
+                    <span class="status-dot"></span>
+                    <span>连接中...</span>
+                </div>
+                <div class="update-time" id="updateTime">--:--:--</div>
+            </div>
+        </header>
+
+        <!-- 移动端快捷导航 -->
+        <nav class="mobile-monitor-nav" id="mobileMonitorNav" aria-label="移动端监控导航">
+            <button class="mobile-monitor-nav-btn" data-target="system-overview">概览</button>
+            <button class="mobile-monitor-nav-btn" data-target="agents">Agent</button>
+            <button class="mobile-monitor-nav-btn" data-target="model-usage">模型</button>
+            <button class="mobile-monitor-nav-btn" data-target="skills-usage">技能</button>
+            <button class="mobile-monitor-nav-btn" data-target="current-tasks">任务</button>
+            <button class="mobile-monitor-nav-btn" data-target="realtimeLogsCard">日志</button>
+            <button class="mobile-monitor-nav-btn" data-target="rightSidebar">侧栏</button>
+        </nav>
+
+        <!-- 主布局：内容区域 + 右侧边栏 -->
+        <div class="main-layout">
+            <!-- 主内容区域 -->
+            <div class="main-content-area">
+                <!-- 主网格布局 -->
+                <div class="grid">
+                    <!-- 系统概览 -->
+                    <div class="card priority-2" data-card-id="system-overview">
+                        <div class="card-header">
+                            <span class="card-icon">🖥️</span>
+                            <span class="card-title">系统概览</span>
+                        </div>
+                        <div class="card-content" id="systemOverview">
+                            <div class="loading">加载中...</div>
+                        </div>
+                        <!-- 图表延迟加载 -->
+                        <div class="card-content" id="metricsChart" style="display: none;" data-lazy-chart="metrics">
+                            <canvas id="metricsChartCanvas" style="min-height:260px;"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Agent组织架构 -->
+                    <div class="card card-wide" data-card-id="agents">
+                        <div class="card-header" style="background: linear-gradient(135deg, rgba(59, 130, 246, 0.05), rgba(139, 92, 246, 0.05));">
+                            <span class="card-icon" style="font-size: 1.5em;">🤖</span>
+                            <span class="card-title" style="font-size: 1.2em; font-weight: 600;">Agent 组织架构</span>
+                            <div class="card-actions">
+                                <input type="text" id="agentSearch" class="search-input" placeholder="搜索Agent..." style="width: 180px;">
+                                <select id="agentStatusFilter" class="btn-small">
+                                    <option value="all">全部状态</option>
+                                    <option value="active">活跃</option>
+                                    <option value="idle">空闲</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="card-content" id="agentsList" style="max-height: none; overflow-y: auto;">
+                            <div class="loading">加载中...</div>
+                        </div>
+                        <!-- 分页控件 -->
+                        <div class="card-content" id="agentsPagination" style="display: none;">
+                            <div class="pagination-controls">
+                                <button class="btn-small" id="agentsPrevPage" disabled>上一页</button>
+                                <span id="agentsPageInfo">第 1 页</span>
+                                <button class="btn-small" id="agentsNextPage">下一页</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 模型使用量统计 -->
+                    <div class="card card-wide" data-card-id="model-usage">
+                        <div class="card-header">
+                            <span class="card-icon">📊</span>
+                            <span class="card-title">模型使用量统计</span>
+                            <div class="card-actions">
+                                <select id="modelUsageRange" class="btn-small">
+                                    <option value="7">最近7天</option>
+                                    <option value="14">最近14天</option>
+                                    <option value="30">最近30天</option>
+                                    <option value="" selected>全部历史</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="card-content" id="modelUsageStats">
+                            <div class="loading">加载中...</div>
+                        </div>
+                    </div>
+
+                    <!-- 技能使用统计 -->
+                    <div class="card card-wide" data-card-id="skills-usage">
+                        <div class="card-header">
+                            <span class="card-icon">🧠</span>
+                            <span class="card-title">技能使用统计</span>
+                            <div class="card-actions">
+                                <select id="skillUsageRange" class="btn-small">
+                                    <option value="7" selected>最近7天</option>
+                                    <option value="30">最近30天</option>
+                                    <option value="">全部历史</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="card-content" id="skillUsageStats">
+                            <div class="loading">加载中...</div>
+                        </div>
+                    </div>
+
+                    <!-- 当前任务 -->
+                    <div class="card" data-card-id="current-tasks">
+                        <div class="card-header">
+                            <span class="card-icon">📋</span>
+                            <span class="card-title">当前任务</span>
+                            <div class="card-actions">
+                                <input type="text" id="taskSearch" class="search-input" placeholder="搜索任务...">
+                                <select id="taskAgentFilter" class="btn-small">
+                                    <option value="all">全部Agent</option>
+                                </select>
+                                <select id="taskStatusFilter" class="btn-small">
+                                    <option value="all">全部状态</option>
+                                    <option value="current">进行中</option>
+                                    <option value="completed">已完成</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="card-content" id="currentTasks">
+                            <div class="loading">加载中...</div>
+                        </div>
+                        <div class="card-content" id="tasksChart" style="display: none;" data-lazy-chart="tasks">
+                            <canvas id="tasksChartCanvas" style="min-height:260px;"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- 模型配额 -->
+                    <div class="card" data-card-id="models-quota">
+                        <div class="card-header">
+                            <span class="card-icon">💎</span>
+                            <span class="card-title">模型配额</span>
+                        </div>
+                        <div class="card-content" id="modelsQuota">
+                            <div class="loading">加载中...</div>
+                        </div>
+                        <div class="card-content" id="modelsChart" style="display: none;" data-lazy-chart="models">
+                            <canvas id="modelsChartCanvas" style="min-height:260px;"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- 任务历史 -->
+                    <div class="card" data-card-id="task-history">
+                        <div class="card-header">
+                            <span class="card-icon">📜</span>
+                            <span class="card-title">任务历史</span>
+                        </div>
+                        <div class="card-content" id="taskHistory">
+                            <div class="loading">加载中...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 实时日志面板 -->
+                <div class="card full-width" id="realtimeLogsCard">
+                    <div class="card-header">
+                        <span class="card-icon">📝</span>
+                        <span class="card-title">实时日志</span>
+                        <div class="card-actions">
+                            <input type="text" id="logSearch" class="search-input" placeholder="搜索日志...">
+                            <select id="logLevelFilter" class="btn-small">
+                                <option value="all">全部级别</option>
+                                <option value="error">错误</option>
+                                <option value="warn">警告</option>
+                                <option value="info">信息</option>
+                            </select>
+                            <button class="btn-small" id="clearLogs">清空</button>
+                            <button class="btn-small" id="toggleAutoScroll">自动滚动: ON</button>
+                        </div>
+                    </div>
+                    <div class="card-content">
+                        <div class="log-container" id="logContainer">
+                            <div class="loading">加载中...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右侧边栏 -->
+            <aside class="right-sidebar" id="rightSidebar">
+                <!-- 健康度面板（紧凑版） -->
+                <section class="health-panel-compact">
+                    <div class="health-score" id="healthScore">
+                        <div class="score-value">--</div>
+                        <div class="score-label">健康度</div>
+                    </div>
+                    <div class="health-status" id="healthStatus">
+                        <div class="status-badge">检测中...</div>
+                    </div>
+                    <div class="health-issues" id="healthIssues"></div>
+                    <div class="health-chart" id="healthChart" style="display: none;" data-lazy-chart="health">
+                        <canvas id="healthChartCanvas"></canvas>
+                    </div>
+                </section>
+
+                <!-- 通道状态面板（紧凑版） -->
+                <section class="channels-panel-compact">
+                    <div class="card-header">
+                        <span class="card-icon">📡</span>
+                        <span class="card-title">通道状态</span>
+                    </div>
+                    <div class="card-content" id="channelsStatus">
+                        <div class="loading">加载中...</div>
+                    </div>
+                </section>
+
+                <!-- 快捷操作面板（紧凑版） -->
+                <div class="quick-actions-compact">
+                    <div class="card-header">
+                        <span class="card-icon">⚡</span>
+                        <span class="card-title">快捷操作</span>
+                    </div>
+                    <div class="card-content" id="quickActions">
+                        <div class="quick-actions-grid">
+                            <button class="action-btn" id="restartGateway">
+                                <span class="action-icon">🔄</span>
+                                <span class="action-label">重启Gateway</span>
+                            </button>
+                            <button class="action-btn" id="clearLogsAction">
+                                <span class="action-icon">🗑️</span>
+                                <span class="action-label">清理日志</span>
+                            </button>
+                            <button class="action-btn" id="reloadConfig">
+                                <span class="action-icon">🔄</span>
+                                <span class="action-label">重新加载配置</span>
+                            </button>
+                            <button class="action-btn" id="exportReport">
+                                <span class="action-icon">📥</span>
+                                <span class="action-label">导出报告</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+        </div>
+
+        <!-- 移动端右侧边栏切换按钮和遮罩 -->
+        <div class="right-sidebar-overlay" id="rightSidebarOverlay"></div>
+        <button class="right-sidebar-toggle" id="rightSidebarToggle" title="显示/隐藏侧边栏">
+            ⚙️
+        </button>
+    </div>
+
+    <!-- Agent详情模态框 -->
+    <div id="agentDetailModal" class="modal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h2 id="agentDetailTitle">Agent详情</h2>
+                <button class="modal-close" id="closeAgentDetail">&times;</button>
+            </div>
+            <div class="modal-body" id="agentDetailContent">
+                <div class="loading">加载中...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 任务详情模态框 -->
+    <div id="taskDetailModal" class="modal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h2 id="taskDetailTitle">任务详情</h2>
+                <button class="modal-close" id="closeTaskDetail">&times;</button>
+            </div>
+            <div class="modal-body" id="taskDetailContent">
+                <div class="loading">加载中...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 按优先级加载 JS -->
+    <script src="/static/js/dashboard-optimized.js?v=20260309-opt" async></script>
+    <script src="/static/js/search.js" defer></script>
+    <script src="/static/js/notifications.js?v=20260309-opt" defer></script>
+    <script src="/static/js/ui-enhancements.js?v=20260309-opt" defer></script>
+    <script src="/static/js/charts.js?v=20260309-opt" defer></script>
+    <script src="/static/js/agent-detail.js" defer></script>
+    <script src="/static/js/task-detail.js" defer></script>
+</body>
+</html>
