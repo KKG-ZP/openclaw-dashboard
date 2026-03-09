@@ -223,6 +223,74 @@ body {
     font-family: 'Courier New', monospace;
 }
 
+/* 版本切换按钮样式 */
+.version-switch-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(139, 92, 246, 0.1));
+    border: 1px solid var(--border-color);
+    border-radius: 20px;
+    text-decoration: none;
+    color: var(--text-secondary);
+    font-size: 0.85em;
+    transition: all 0.2s ease;
+    cursor: pointer;
+}
+
+.version-switch-btn:hover {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(139, 92, 246, 0.2));
+    border-color: var(--accent);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.15);
+}
+
+.version-switch-btn.current {
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(59, 130, 246, 0.15));
+    border-color: rgba(16, 185, 129, 0.3);
+}
+
+.version-switch-btn.current:hover {
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.25), rgba(59, 130, 246, 0.25));
+    border-color: var(--success);
+}
+
+.version-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.75em;
+    font-weight: 600;
+    background: var(--accent);
+    color: white;
+}
+
+.version-badge.v2 {
+    background: linear-gradient(135deg, #8b5cf6, #6366f1);
+}
+
+.version-badge.current {
+    background: linear-gradient(135deg, #10b981, #3b82f6);
+}
+
+.version-label {
+    white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+    .version-switch-btn {
+        padding: 5px 10px;
+        font-size: 0.8em;
+    }
+    
+    .version-label {
+        display: none;
+    }
+}
+
 /* 搜索相关样式 */
 .global-search-container {
     position: relative;
