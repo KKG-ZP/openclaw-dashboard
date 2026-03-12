@@ -53,8 +53,130 @@ class AgentDetail {
     }
   }
 
+  getOrganizationMeta(type, label) {
+    const metaMap = {
+      'command-center': {
+        label: '作战指挥中心',
+        color: '#7c3aed',
+        background: 'rgba(124, 58, 237, 0.12)',
+        border: 'rgba(124, 58, 237, 0.22)',
+        icon: '🧭'
+      },
+      'direct-department': {
+        label: '直属部门',
+        color: '#2563eb',
+        background: 'rgba(37, 99, 235, 0.12)',
+        border: 'rgba(37, 99, 235, 0.22)',
+        icon: '🏛️'
+      },
+      'special-envoy': {
+        label: '特使机构',
+        color: '#d97706',
+        background: 'rgba(217, 119, 6, 0.12)',
+        border: 'rgba(217, 119, 6, 0.22)',
+        icon: '📜'
+      },
+      'managed-agent': {
+        label: '下级 Agent',
+        color: '#0f766e',
+        background: 'rgba(15, 118, 110, 0.12)',
+        border: 'rgba(15, 118, 110, 0.22)',
+        icon: '🧩'
+      },
+      'runtime-subagent': {
+        label: '下级 Agent',
+        color: '#0f766e',
+        background: 'rgba(15, 118, 110, 0.12)',
+        border: 'rgba(15, 118, 110, 0.22)',
+        icon: '🧩'
+      },
+      'independent': {
+        label: '独立实例',
+        color: '#6b7280',
+        background: 'rgba(107, 114, 128, 0.12)',
+        border: 'rgba(107, 114, 128, 0.22)',
+        icon: '🛰️'
+      }
+    };
+    const resolved = metaMap[type] || metaMap['managed-agent'];
+    return { ...resolved, label: label || resolved.label };
+  }
+
+  renderOrganizationBadge(type, label) {
+    const meta = this.getOrganizationMeta(type, label);
+    return `
+      <span class="badge" style="background: ${meta.background}; color: ${meta.color}; border: 1px solid ${meta.border};">
+        ${meta.icon} ${meta.label}
+      </span>
+    `;
+  }
+
+  renderOrganizationChildren(children) {
+    if (!children || children.length === 0) return '';
+
+    const groups = new Map();
+    const groupOrder = ['direct-department', 'special-envoy', 'managed-agent', 'runtime-subagent', 'independent'];
+
+    children.forEach(child => {
+      const groupKey = child.organizationType || 'managed-agent';
+      if (!groups.has(groupKey)) groups.set(groupKey, []);
+      groups.get(groupKey).push(child);
+    });
+
+    const sections = groupOrder
+      .filter(groupKey => groups.has(groupKey))
+      .map(groupKey => {
+        const meta = this.getOrganizationMeta(groupKey);
+        const items = groups.get(groupKey) || [];
+        const cards = items.map(child => `
+          <div class="clickable" onclick="window.agentDetailInstance.show('${child.id}')" style="
+            padding: 10px 12px;
+            border-radius: 12px;
+            background: ${meta.background};
+            border: 1px solid ${meta.border};
+            cursor: pointer;
+            min-width: 220px;
+            transition: all 0.2s;
+          " onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 8px 18px rgba(0,0,0,0.08)';"
+             onmouseout="this.style.transform='none'; this.style.boxShadow='none';">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+              <span style="font-size: 1.1em;">${child.emoji || '🤖'}</span>
+              <span style="font-weight: 600; color: var(--text-primary);">${this.escapeHtml(child.name || child.id)}</span>
+            </div>
+            <div style="font-size: 0.75em; color: var(--text-secondary); margin-bottom: 4px;">${this.escapeHtml(child.id)}</div>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+              <span class="badge badge-blue">${this.escapeHtml(child.role || '助手')}</span>
+              <span class="badge ${child.status === 'active' ? 'badge-green' : 'badge-yellow'}">${child.status === 'active' ? '活跃' : '空闲'}</span>
+              <span class="badge" style="background: rgba(15, 23, 42, 0.06); color: var(--text-secondary);">${child.sessionCount || 0} 会话</span>
+            </div>
+          </div>
+        `).join('');
+
+        return `
+          <div style="margin-top: 12px;">
+            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 0.9em; font-weight: 600; color: ${meta.color};">
+              <span>${meta.icon}</span>
+              <span>${meta.label} (${items.length})</span>
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+              ${cards}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+    return `
+      <div class="detail-section">
+        <h3>组织成员</h3>
+        ${sections}
+      </div>
+    `;
+  }
+
   render(agent) {
     if (this.title) this.title.textContent = `${agent.emoji || ''} ${agent.name} - 详情`;
+    const organizationBadge = this.renderOrganizationBadge(agent.organizationType, agent.organizationLabel);
+    const organizationChildrenHtml = this.renderOrganizationChildren(agent.organizationChildren || []);
 
     const html = `
       <div class="detail-section">
@@ -67,6 +189,10 @@ class AgentDetail {
           <div class="detail-item">
             <span class="detail-label">名称</span>
             <span class="detail-value">${agent.name}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">组织类型</span>
+            <span class="detail-value">${organizationBadge}</span>
           </div>
           <div class="detail-item">
             <span class="detail-label">状态</span>
@@ -83,6 +209,10 @@ class AgentDetail {
             <span class="detail-value">${agent.workspace}</span>
           </div>
           <div class="detail-item">
+            <span class="detail-label">上级机构</span>
+            <span class="detail-value">${agent.parentId || '无'}</span>
+          </div>
+          <div class="detail-item">
             <span class="detail-label">会话数</span>
             <span class="detail-value">${agent.sessionCount}</span>
           </div>
@@ -97,14 +227,7 @@ class AgentDetail {
         </div>
       </div>
 
-      ${agent.subagents && agent.subagents.length > 0 ? `
-        <div class="detail-section">
-          <h3>子Agent</h3>
-          <div class="subagents-list">
-            ${agent.subagents.map(sub => `<span class="badge badge-blue">${sub}</span>`).join('')}
-          </div>
-        </div>
-      ` : ''}
+      ${organizationChildrenHtml}
 
       <div class="detail-section">
         <h3>配置信息</h3>

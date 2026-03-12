@@ -14,6 +14,73 @@ const LOGS_DIR = path.join(OPENCLAW_HOME, 'logs');
 const AGENTS_DIR = path.join(OPENCLAW_HOME, 'agents');
 const DATA_DIR = path.join(__dirname, 'data');
 
+const LEGACY_DIRECT_DEPARTMENT_IDS = new Set([
+  'hanlin-agent',
+  'hanlinyuan-agent',
+  'neige-agent',
+  'guozijian-agent',
+  'jinyiwei-agent',
+  'duchayuan-agent',
+  'gongfang-agent',
+  'bingbu-agent',
+  'hubu-agent',
+  'libu-agent',
+  'gongbu-agent',
+  'xingbu-agent'
+]);
+
+const LEGACY_SPECIAL_INSTITUTION_IDS = new Set([
+  'xingrensi-agent'
+]);
+
+function resolveOrganizationInfo(agentId, ...configs) {
+  const merged = {};
+  for (const cfg of configs) {
+    if (cfg && typeof cfg === 'object' && cfg.organization && typeof cfg.organization === 'object') {
+      Object.assign(merged, cfg.organization);
+    }
+  }
+
+  let parentId = merged.parentId || null;
+  let organizationType = merged.kind || merged.type || '';
+
+  if (agentId === 'main') {
+    parentId = null;
+    organizationType = organizationType || 'command-center';
+  } else if (!parentId) {
+    if (LEGACY_DIRECT_DEPARTMENT_IDS.has(agentId) || LEGACY_SPECIAL_INSTITUTION_IDS.has(agentId)) {
+      parentId = 'main';
+    }
+  }
+
+  if (!organizationType) {
+    if (LEGACY_DIRECT_DEPARTMENT_IDS.has(agentId)) {
+      organizationType = 'direct-department';
+    } else if (LEGACY_SPECIAL_INSTITUTION_IDS.has(agentId)) {
+      organizationType = 'special-envoy';
+    } else if (parentId) {
+      organizationType = 'managed-agent';
+    } else {
+      organizationType = 'independent';
+    }
+  }
+
+  const defaultLabels = {
+    'command-center': '作战指挥中心',
+    'direct-department': '直属部门',
+    'special-envoy': '特使机构',
+    'managed-agent': '下级 Agent',
+    'runtime-subagent': '下级 Agent',
+    'independent': '独立实例'
+  };
+
+  return {
+    parentId,
+    organizationType,
+    organizationLabel: merged.label || defaultLabels[organizationType] || '组织成员'
+  };
+}
+
 class DataCollector {
   constructor() {
     this.configCache = null;
@@ -260,12 +327,17 @@ class DataCollector {
       'main': '司礼监',
       'bingbu-agent': '兵部尚书',
       'hanlinyuan-agent': '翰林学士',
+      'hanlin-agent': '翰林学士',
+      'neige-agent': '内阁大学士',
       'guozijian-agent': '国子监祭酒',
+      'jinyiwei-agent': '锦衣卫指挥使',
       'hubu-agent': '户部尚书',
       'libu-agent': '礼部尚书',
       'gongbu-agent': '工部尚书',
       'xingbu-agent': '刑部尚书',
       'duchayuan-agent': '都御史',
+      'gongfang-agent': '工坊大匠',
+      'xingrensi-agent': '行人司使',
       'assistant': '助理',
       'system-engineer': '系统工程师',
       'health-expert': '健康顾问',
@@ -291,7 +363,7 @@ class DataCollector {
       const defaultModel = agentConfig.model?.primary || config.agents.defaults?.model?.primary || 'N/A';
       const currentModel = status.currentModel || defaultModel;
       const role = agentConfig.identity?.theme || agentConfig.identity?.role || roleMap[agentId] || '通用助手';
-      
+      const organization = resolveOrganizationInfo(agentId, agentConfig, config?.agents?.configs?.[agentId] || {});
       agents.push({
         id: agentId,
         name: agentConfig.identity?.name || agentConfig.name || agentId,
@@ -300,6 +372,10 @@ class DataCollector {
         model: currentModel,
         defaultModel: defaultModel,
         subagents: agentConfig.subagents?.allowAgents || [],
+        parentId: organization.parentId,
+        managedBy: organization.parentId || undefined,
+        organizationType: organization.organizationType,
+        organizationLabel: organization.organizationLabel,
         status: status.status,
         sessionCount: status.sessionCount,
         lastActivity: status.lastActivity,
@@ -328,7 +404,7 @@ class DataCollector {
         // 尝试从 configs 对象获取补充信息
         const cfgExtra = config?.agents?.configs?.[dirName] || {};
         const role = cfgExtra.identity?.theme || cfgExtra.identity?.role || roleMap[dirName] || '子Agent';
-
+        const organization = resolveOrganizationInfo(dirName, cfgExtra);
         agents.push({
           id: dirName,
           name: cfgExtra.identity?.name || cfgExtra.name || dirName,
@@ -337,6 +413,10 @@ class DataCollector {
           model: status.currentModel || cfgExtra.model?.primary || 'N/A',
           defaultModel: cfgExtra.model?.primary || 'N/A',
           subagents: [],
+          parentId: organization.parentId,
+          managedBy: organization.parentId || undefined,
+          organizationType: organization.organizationType,
+          organizationLabel: organization.organizationLabel,
           status: status.status,
           sessionCount: status.sessionCount,
           lastActivity: status.lastActivity,
@@ -1745,13 +1825,41 @@ class DataCollector {
       const defaults = config?.agents?.defaults || {};
       const roleMap = {
         'main': '司礼监', 'bingbu-agent': '兵部尚书', 'hanlinyuan-agent': '翰林学士',
-        'guozijian-agent': '国子监祭酒', 'hubu-agent': '户部尚书', 'libu-agent': '礼部尚书',
+        'hanlin-agent': '翰林学士', 'neige-agent': '内阁大学士', 'guozijian-agent': '国子监祭酒',
+        'jinyiwei-agent': '锦衣卫指挥使', 'hubu-agent': '户部尚书', 'libu-agent': '礼部尚书',
         'gongbu-agent': '工部尚书', 'xingbu-agent': '刑部尚书', 'duchayuan-agent': '都御史',
+        'gongfang-agent': '工坊大匠', 'xingrensi-agent': '行人司使',
         'assistant': '助理', 'system-engineer': '系统工程师', 'health-expert': '健康顾问',
         'coder': '程序员', 'designer': '设计师', 'writer': '文案', 'analyst': '分析师',
         'tester': '测试工程师', 'devops': '运维工程师'
       };
       const role = agentConfig?.identity?.theme || agentConfig?.identity?.role || cfgExtra.identity?.theme || cfgExtra.identity?.role || roleMap[agentId] || '通用助手';
+      const organization = resolveOrganizationInfo(agentId, agentConfig || {}, cfgExtra || {});
+      const allAgents = await this.getAgentsList();
+      const organizationChildren = allAgents
+        .filter(item => item.parentId === agentId)
+        .sort((a, b) => {
+          const order = {
+            'direct-department': 1,
+            'special-envoy': 2,
+            'managed-agent': 3,
+            'runtime-subagent': 4,
+            'independent': 5
+          };
+          const diff = (order[a.organizationType] || 99) - (order[b.organizationType] || 99);
+          if (diff !== 0) return diff;
+          return String(a.name || a.id).localeCompare(String(b.name || b.id), 'zh-CN');
+        })
+        .map(item => ({
+          id: item.id,
+          name: item.name,
+          emoji: item.emoji,
+          role: item.role,
+          status: item.status,
+          sessionCount: item.sessionCount,
+          organizationType: item.organizationType,
+          organizationLabel: item.organizationLabel
+        }));
 
       return {
         id: agentId,
@@ -1761,6 +1869,11 @@ class DataCollector {
         model: agentConfig?.model?.primary || cfgExtra.model?.primary || defaults.model?.primary || 'N/A',
         workspace: agentConfig?.workspace || cfgExtra.workspace || defaults.workspace || 'N/A',
         subagents: agentConfig?.subagents?.allowAgents || [],
+        parentId: organization.parentId,
+        managedBy: organization.parentId || undefined,
+        organizationType: organization.organizationType,
+        organizationLabel: organization.organizationLabel,
+        organizationChildren,
         status: status.status,
         sessionCount: status.sessionCount,
         totalMessages,

@@ -3,6 +3,14 @@ class Dashboard {
     this.ws = null;
     this.autoScroll = true;
     this.data = {};
+    this.panelRefreshState = {
+      modelUsage: 0,
+      skillUsage: 0,
+      resources: 0,
+      alerts: 0,
+      statistics: 0,
+      messages: 0
+    };
     this.init();
   }
 
@@ -296,16 +304,16 @@ class Dashboard {
     this.updateChannelsStatus();
     this.updateModelsQuota();
     this.updateTaskHistory();
-    this.updateModelUsageStats();
-    this.updateSkillUsageStats();
+    this.maybeRefreshAsyncPanel('modelUsage', 60000, () => this.updateModelUsageStats());
+    this.maybeRefreshAsyncPanel('skillUsage', 60000, () => this.updateSkillUsageStats());
     this.updateLogs();
     
     // 更新侧边栏布局的特定面板
     if (window.sidebarManager) {
-      this.updateResourcesPanel();
-      this.updateAlertsPanel();
-      this.updateStatisticsPanel();
-      this.updateMessagesPanel();
+      this.maybeRefreshAsyncPanel('resources', 15000, () => this.updateResourcesPanel());
+      this.maybeRefreshAsyncPanel('alerts', 15000, () => this.updateAlertsPanel());
+      this.maybeRefreshAsyncPanel('statistics', 20000, () => this.updateStatisticsPanel());
+      this.maybeRefreshAsyncPanel('messages', 30000, () => this.updateMessagesPanel());
     }
     
     // 更新侧边栏徽章
@@ -356,10 +364,7 @@ class Dashboard {
     if (!panel) return;
 
     try {
-      const response = await fetch('/api/system/resources');
-      if (!response.ok) return;
-      
-      const resources = await response.json();
+      const resources = await this.fetchJsonWithTimeout('/api/system/resources', 6000);
       const sys = resources && resources.system;
       if (!sys || !sys.cpu || !sys.memory || !sys.disk || !sys.network) {
         panel.innerHTML = '<div class="empty-state">资源数据不可用</div>';
@@ -732,6 +737,32 @@ class Dashboard {
     }
   }
 
+  maybeRefreshAsyncPanel(key, minIntervalMs, refreshFn) {
+    const now = Date.now();
+    const lastAt = this.panelRefreshState[key] || 0;
+    if ((now - lastAt) < minIntervalMs) return;
+    this.panelRefreshState[key] = now;
+    Promise.resolve()
+      .then(refreshFn)
+      .catch(error => {
+        console.error(`刷新面板失败: ${key}`, error);
+      });
+  }
+
+  async fetchJsonWithTimeout(url, timeoutMs = 8000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, { signal: controller.signal });
+      if (!response.ok) {
+        throw new Error(`HTTP错误: ${response.status}`);
+      }
+      return await response.json();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   // 更新Agent列表 - 组织架构视图
   updateAgentsList() {
     if (!this.data.agents || this.data.agents.length === 0) {
@@ -753,16 +784,29 @@ class Dashboard {
     // 构建组织架构
     const agents = this.data.agents;
     const agentMap = new Map(agents.map(a => [a.id, a]));
-    
-    // 找出哪些 agent 是其他 agent 的子 agent
-    const childAgentIds = new Set();
+    const childrenMap = new Map();
+
+    const ensureChildrenBucket = (parentId) => {
+      if (!childrenMap.has(parentId)) childrenMap.set(parentId, []);
+      return childrenMap.get(parentId);
+    };
+
     agents.forEach(agent => {
+      if (agent.parentId && agentMap.has(agent.parentId)) {
+        ensureChildrenBucket(agent.parentId).push(agent.id);
+      }
       if (agent.subagents && agent.subagents.length > 0) {
-        agent.subagents.forEach(subId => childAgentIds.add(subId));
+        agent.subagents.forEach(subId => {
+          if (agentMap.has(subId)) {
+            const bucket = ensureChildrenBucket(agent.id);
+            if (!bucket.includes(subId)) bucket.push(subId);
+          }
+        });
       }
     });
-    
-    // 主 Agent（不是任何人的子 agent）
+
+    // 主 Agent（不是任何人的下级）
+    const childAgentIds = new Set(Array.from(childrenMap.values()).flat());
     const mainAgents = agents.filter(a => !childAgentIds.has(a.id));
     
     // 统计信息
@@ -794,7 +838,7 @@ class Dashboard {
 
       <!-- 组织架构树 -->
       <div class="org-tree">
-        ${mainAgents.map(agent => this._renderAgentNode(agent, agentMap, 0)).join('')}
+        ${mainAgents.map(agent => this._renderAgentNode(agent, agentMap, childrenMap, 0)).join('')}
       </div>
     `;
     
@@ -802,8 +846,9 @@ class Dashboard {
   }
 
   // 渲染单个 Agent 节点（支持递归渲染子 Agent）
-  _renderAgentNode(agent, agentMap, level) {
-    const hasSubagents = agent.subagents && agent.subagents.length > 0;
+  _renderAgentNode(agent, agentMap, childrenMap, level) {
+    const childIds = childrenMap.get(agent.id) || [];
+    const hasSubagents = childIds.length > 0;
     const isActive = agent.status === 'active';
     
     // 状态颜色
@@ -816,32 +861,96 @@ class Dashboard {
       // 收集子 Agent 信息用于内联显示 - 方块状横向排列
       let subagentsHtml = '';
       if (hasSubagents) {
-        const subagentItems = agent.subagents.map(subId => {
+        const groupMetaMap = {
+          'direct-department': {
+            label: '直属部门',
+            icon: '🏛️',
+            accent: '#2563eb',
+            accentBg: 'rgba(37, 99, 235, 0.1)',
+            accentBorder: 'rgba(37, 99, 235, 0.18)'
+          },
+          'special-envoy': {
+            label: '特使机构',
+            icon: '📜',
+            accent: '#d97706',
+            accentBg: 'rgba(217, 119, 6, 0.1)',
+            accentBorder: 'rgba(217, 119, 6, 0.18)'
+          },
+          'managed-agent': {
+            label: '下级 Agent',
+            icon: '🧩',
+            accent: '#0f766e',
+            accentBg: 'rgba(15, 118, 110, 0.1)',
+            accentBorder: 'rgba(15, 118, 110, 0.18)'
+          },
+          'runtime-subagent': {
+            label: '下级 Agent',
+            icon: '🧩',
+            accent: '#0f766e',
+            accentBg: 'rgba(15, 118, 110, 0.1)',
+            accentBorder: 'rgba(15, 118, 110, 0.18)'
+          },
+          'independent': {
+            label: '独立实例',
+            icon: '🛰️',
+            accent: '#6b7280',
+            accentBg: 'rgba(107, 114, 128, 0.1)',
+            accentBorder: 'rgba(107, 114, 128, 0.18)'
+          }
+        };
+        const groupOrder = ['direct-department', 'special-envoy', 'managed-agent', 'runtime-subagent', 'independent'];
+        const childGroups = new Map();
+
+        childIds.forEach(subId => {
           const subAgent = agentMap.get(subId);
-          if (subAgent) {
-            const subActive = subAgent.status === 'active';
-            const subColor = subActive ? '#10b981' : '#f59e0b';
-            const subBg = subActive ? 'rgba(16, 185, 129, 0.08)' : 'rgba(245, 158, 11, 0.08)';
-            const subBorder = subActive ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)';
-            return `
-              <div class="clickable agent-subagent-card" onclick="event.stopPropagation(); window.showAgentDetail('${subAgent.id}')" style="
-                padding: 12px; text-align: center;
-                background: ${subBg}; border-radius: 12px; cursor: pointer;
-                border: 1px solid ${subBorder}; transition: all 0.2s;
-              " onmouseover="this.style.transform='translateY(-3px)'; this.style.boxShadow='0 6px 16px rgba(0,0,0,0.12)';" 
-                 onmouseout="this.style.transform='none'; this.style.boxShadow='none';">
-                <div style="position: relative; display: inline-block;">
-                  <div style="font-size: 2em; width: 50px; height: 50px; display: flex; align-items: center; justify-content: center; background: ${subActive ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)'}; border-radius: 12px; margin: 0 auto 8px;">
-                    ${subAgent.emoji}
+          const groupKey = subAgent?.organizationType || 'managed-agent';
+          if (!childGroups.has(groupKey)) childGroups.set(groupKey, []);
+          childGroups.get(groupKey).push(subId);
+        });
+
+        const orderedGroups = groupOrder
+          .filter(groupKey => childGroups.has(groupKey))
+          .map(groupKey => ({
+            key: groupKey,
+            meta: groupMetaMap[groupKey] || groupMetaMap['managed-agent'],
+            items: childGroups.get(groupKey) || []
+          }));
+
+        const childSectionLabel = orderedGroups
+          .map(group => `${group.meta.label} ${group.items.length}`)
+          .join(' · ') || `组织成员 ${childIds.length}`;
+
+        const groupedChildHtml = orderedGroups.map((group, index) => {
+          const subagentItems = group.items.map(subId => {
+            const subAgent = agentMap.get(subId);
+            if (subAgent) {
+              const subActive = subAgent.status === 'active';
+              const subColor = subActive ? '#10b981' : '#f59e0b';
+              const subBg = subActive ? 'rgba(16, 185, 129, 0.08)' : 'rgba(245, 158, 11, 0.08)';
+              const subBorder = subActive ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)';
+              const organizationLabel = subAgent.organizationLabel || group.meta.label;
+              return `
+                <div class="clickable agent-subagent-card" onclick="event.stopPropagation(); window.showAgentDetail('${subAgent.id}')" style="
+                  padding: 12px; text-align: center;
+                  background: ${subBg}; border-radius: 12px; cursor: pointer;
+                  border: 1px solid ${subBorder}; transition: all 0.2s;
+                " onmouseover="this.style.transform='translateY(-3px)'; this.style.boxShadow='0 6px 16px rgba(0,0,0,0.12)';" 
+                   onmouseout="this.style.transform='none'; this.style.boxShadow='none';">
+                  <div style="position: relative; display: inline-block;">
+                    <div style="font-size: 2em; width: 50px; height: 50px; display: flex; align-items: center; justify-content: center; background: ${subActive ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)'}; border-radius: 12px; margin: 0 auto 8px;">
+                      ${subAgent.emoji}
+                    </div>
+                    <span style="position: absolute; top: -2px; right: -2px; width: 10px; height: 10px; background: ${subColor}; border-radius: 50%; border: 2px solid var(--card-bg); ${subActive ? 'animation: pulse 2s infinite;' : ''}"></span>
                   </div>
-                  <span style="position: absolute; top: -2px; right: -2px; width: 10px; height: 10px; background: ${subColor}; border-radius: 50%; border: 2px solid var(--card-bg); ${subActive ? 'animation: pulse 2s infinite;' : ''}"></span>
+                  <div style="font-weight: 600; font-size: 0.85em; color: var(--text-primary); margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${subAgent.name}</div>
+                  <div style="display: flex; gap: 4px; justify-content: center; flex-wrap: wrap; margin-bottom: 4px;">
+                    <div style="font-size: 0.65em; padding: 1px 6px; background: rgba(99, 102, 241, 0.1); color: #6366f1; border-radius: 8px;">${subAgent.role || '助手'}</div>
+                    <div style="font-size: 0.65em; padding: 1px 6px; background: ${group.meta.accentBg}; color: ${group.meta.accent}; border-radius: 8px; border: 1px solid ${group.meta.accentBorder};">${organizationLabel}</div>
+                  </div>
+                  <div style="font-size: 0.7em; color: var(--text-muted);">${subAgent.sessionCount || 0} 会话</div>
                 </div>
-                <div style="font-weight: 600; font-size: 0.85em; color: var(--text-primary); margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${subAgent.name}</div>
-                <div style="font-size: 0.65em; padding: 1px 6px; background: rgba(99, 102, 241, 0.1); color: #6366f1; border-radius: 8px; display: inline-block; margin-bottom: 4px;">${subAgent.role || '助手'}</div>
-                <div style="font-size: 0.7em; color: var(--text-muted);">${subAgent.sessionCount || 0} 会话</div>
-              </div>
-            `;
-          } else {
+              `;
+            }
             return `
               <div class="agent-subagent-card" style="padding: 12px; text-align: center; background: rgba(100,100,100,0.05); border: 1px dashed var(--border); border-radius: 12px;">
                 <div style="font-size: 2em; margin-bottom: 8px;">🔗</div>
@@ -849,17 +958,27 @@ class Dashboard {
                 <div style="font-size: 0.7em; color: var(--text-muted);">未配置</div>
               </div>
             `;
-          }
+          }).join('');
+
+          return `
+            <div style="margin-top: ${index === 0 ? 0 : 14}px;">
+              <div style="display: flex; align-items: center; gap: 6px; font-size: 0.78em; color: var(--text-secondary); margin-bottom: 10px; font-weight: 600;">
+                <span>${group.meta.icon}</span>
+                <span>${group.meta.label} (${group.items.length})</span>
+              </div>
+              <div class="agent-subagent-list">
+                ${subagentItems}
+              </div>
+            </div>
+          `;
         }).join('');
-        
+
         subagentsHtml = `
           <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);">
             <div style="font-size: 0.8em; color: var(--text-secondary); margin-bottom: 10px; font-weight: 500;">
-              <span style="margin-right: 4px;">👥</span> 子 Agent (${agent.subagents.length})
+              <span style="margin-right: 4px;">🏷️</span> ${childSectionLabel} (${childIds.length})
             </div>
-            <div class="agent-subagent-list">
-              ${subagentItems}
-            </div>
+            ${groupedChildHtml}
           </div>
         `;
       }
@@ -1279,7 +1398,10 @@ class Dashboard {
     // 绑定时间范围切换事件（只绑定一次）
     if (rangeSelect && !rangeSelect._bound) {
       rangeSelect._bound = true;
-      rangeSelect.addEventListener('change', () => this.updateModelUsageStats());
+      rangeSelect.addEventListener('change', () => {
+        this.panelRefreshState.modelUsage = 0;
+        this.updateModelUsageStats();
+      });
     }
 
     // 获取当前选中的 Token 维度（默认总量）
@@ -1289,9 +1411,7 @@ class Dashboard {
     const tokenDimension = this.modelTokenDimension;
 
     try {
-      const response = await fetch(`/api/models/usage?${daysParam}`);
-      if (!response.ok) throw new Error(`HTTP错误: ${response.status}`);
-      const data = await response.json();
+      const data = await this.fetchJsonWithTimeout(`/api/models/usage?${daysParam}`, 10000);
 
       if (!data || data.summary.totalCalls === 0) {
         container.innerHTML = '<div class="empty-state">暂无模型使用记录</div>';
@@ -1886,7 +2006,10 @@ class Dashboard {
 
     if (rangeSelect && !rangeSelect._bound) {
       rangeSelect._bound = true;
-      rangeSelect.addEventListener('change', () => this.updateSkillUsageStats());
+      rangeSelect.addEventListener('change', () => {
+        this.panelRefreshState.skillUsage = 0;
+        this.updateSkillUsageStats();
+      });
     }
 
     try {
@@ -1969,10 +2092,7 @@ class Dashboard {
     if (!panel) return;
 
     try {
-      const response = await fetch('/api/messages/stream?limit=50');
-      if (!response.ok) return;
-      
-      const data = await response.json();
+      const data = await this.fetchJsonWithTimeout('/api/messages/stream?limit=50&compact=1', 8000);
       if (data.messages.length === 0) {
         panel.innerHTML = '<div class="empty-state">暂无消息</div>';
         return;

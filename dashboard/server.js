@@ -33,6 +33,57 @@ const collector = new DataCollector();
 const alertManager = new AlertManager();
 const benchmark = new Benchmark();
 const logAnalyzer = new LogAnalyzer();
+const endpointCache = new Map();
+
+function makeCacheKey(prefix, params = {}) {
+  const normalized = Object.entries(params)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${key}=${value}`)
+    .join('&');
+  return normalized ? `${prefix}?${normalized}` : prefix;
+}
+
+async function getOrSetEndpointCache(key, ttlMs, producer) {
+  const now = Date.now();
+  const cached = endpointCache.get(key);
+  if (cached) {
+    if (cached.value !== undefined && cached.expiresAt > now) {
+      return cached.value;
+    }
+    if (cached.promise) {
+      return cached.promise;
+    }
+  }
+
+  const promise = Promise.resolve()
+    .then(producer)
+    .then((value) => {
+      endpointCache.set(key, { value, expiresAt: Date.now() + ttlMs });
+      return value;
+    })
+    .catch((error) => {
+      endpointCache.delete(key);
+      throw error;
+    });
+
+  endpointCache.set(key, { promise, expiresAt: now + ttlMs });
+  return promise;
+}
+
+async function withTimeout(task, timeoutMs, label) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(task),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} 超时（>${timeoutMs}ms）`)), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 // 确保路径正确 - 使用绝对路径
 const staticDir = path.resolve(__dirname, 'static');
@@ -89,6 +140,13 @@ app.use('/fund', createProxyMiddleware({
     return rewritten || '/';
   },
 }));
+
+// 兼容旧入口：/toolbox/dashboard/api/* -> /api/*
+app.use('/toolbox/dashboard/api', (req, res) => {
+  const suffix = req.originalUrl.replace(/^\/toolbox\/dashboard\/api/, '') || '/';
+  const normalized = suffix.startsWith('/') ? suffix : `/${suffix}`;
+  return res.redirect(302, `/api${normalized === '/' ? '' : normalized}`);
+});
 
 // 兼容旧入口：/toolbox/dashboard/* -> /dashboard/*
 app.use('/toolbox/dashboard', (req, res) => {
@@ -423,8 +481,12 @@ app.get('/api/models/stats', async (req, res) => {
 // 模型使用量统计（四维度：按模型、按Agent、按天、总计）
 app.get('/api/models/usage', async (req, res) => {
   try {
-    const days = parseInt(req.query.days) || 30;
-    const data = await collector.getModelUsageStats(days);
+    const rawDays = req.query.days;
+    const days = rawDays === undefined || rawDays === '' ? null : parseInt(rawDays, 10);
+    const cacheKey = makeCacheKey('api/models/usage', { days: days ?? 'all' });
+    const data = await getOrSetEndpointCache(cacheKey, 60000, () =>
+      withTimeout(() => collector.getModelUsageStats(days), 12000, '模型使用量统计')
+    );
     res.json(data);
   } catch (error) {
     console.error('获取模型使用量统计失败:', error);
@@ -587,58 +649,60 @@ app.post('/api/actions/reload-config', async (req, res) => {
 // 获取系统资源详情
 app.get('/api/system/resources', async (req, res) => {
   try {
-    const cpu = osUtils.cpu;
-    const mem = osUtils.mem;
-    const drive = osUtils.drive;
-    const netstat = osUtils.netstat;
+    const data = await getOrSetEndpointCache('api/system/resources', 15000, async () => {
+      const cpu = osUtils.cpu;
+      const mem = osUtils.mem;
+      const drive = osUtils.drive;
+      const netstat = osUtils.netstat;
 
-    const [cpuUsage, memInfo, driveInfo, netInfo] = await Promise.all([
-      cpu.usage().catch(() => 0),
-      mem.info().catch(() => ({ totalMemMb: 0, usedMemMb: 0, freeMemMb: 0 })),
-      drive.info().catch(() => ({ totalGb: 0, usedGb: 0, freeGb: 0 })),
-      netstat.inOut().catch(() => ({ total: { inputMb: 0, outputMb: 0 } }))
-    ]);
+      const [cpuUsage, memInfo, driveInfo, netInfo] = await withTimeout(() => Promise.all([
+        cpu.usage().catch(() => 0),
+        mem.info().catch(() => ({ totalMemMb: 0, usedMemMb: 0, freeMemMb: 0 })),
+        drive.info().catch(() => ({ totalGb: 0, usedGb: 0, freeGb: 0 })),
+        netstat.inOut().catch(() => ({ total: { inputMb: 0, outputMb: 0 } }))
+      ]), 8000, '系统资源采集');
 
-    const gatewayInfo = await collector.getProcessInfo('openclaw-gateway');
-    const gatewayCpu = gatewayInfo ? parseFloat(gatewayInfo.cpu.replace('%', '')) : 0;
-    const gatewayMemoryKB = gatewayInfo ? parseInt(gatewayInfo.memory.replace(' KB', '')) : 0;
-    const gatewayMemoryMB = gatewayMemoryKB / 1024;
+      const gatewayInfo = await collector.getProcessInfo('openclaw-gateway');
+      const gatewayCpu = gatewayInfo ? parseFloat(gatewayInfo.cpu.replace('%', '')) : 0;
+      const gatewayMemoryKB = gatewayInfo ? parseInt(gatewayInfo.memory.replace(' KB', '')) : 0;
+      const gatewayMemoryMB = gatewayMemoryKB / 1024;
 
-    const result = {
-      timestamp: new Date().toISOString(),
-      system: {
-        cpu: {
-          usage: cpuUsage,
-          cores: osUtils.cpu.count()
+      return {
+        timestamp: new Date().toISOString(),
+        system: {
+          cpu: {
+            usage: cpuUsage,
+            cores: osUtils.cpu.count()
+          },
+          memory: {
+            total: memInfo.totalMemMb,
+            used: memInfo.usedMemMb,
+            free: memInfo.freeMemMb,
+            percent: memInfo.totalMemMb > 0 
+              ? (memInfo.usedMemMb / memInfo.totalMemMb) * 100 
+              : 0
+          },
+          disk: {
+            total: driveInfo.totalGb,
+            used: driveInfo.usedGb,
+            free: driveInfo.freeGb,
+            percent: driveInfo.totalGb > 0 
+              ? (driveInfo.usedGb / driveInfo.totalGb) * 100 
+              : 0
+          },
+          network: {
+            input: netInfo.total.inputMb,
+            output: netInfo.total.outputMb
+          }
         },
-        memory: {
-          total: memInfo.totalMemMb,
-          used: memInfo.usedMemMb,
-          free: memInfo.freeMemMb,
-          percent: memInfo.totalMemMb > 0 
-            ? (memInfo.usedMemMb / memInfo.totalMemMb) * 100 
-            : 0
-        },
-        disk: {
-          total: driveInfo.totalGb,
-          used: driveInfo.usedGb,
-          free: driveInfo.freeGb,
-          percent: driveInfo.totalGb > 0 
-            ? (driveInfo.usedGb / driveInfo.totalGb) * 100 
-            : 0
-        },
-        network: {
-          input: netInfo.total.inputMb,
-          output: netInfo.total.outputMb
+        gateway: {
+          cpu: gatewayCpu,
+          memory: gatewayMemoryMB
         }
-      },
-      gateway: {
-        cpu: gatewayCpu,
-        memory: gatewayMemoryMB
-      }
-    };
+      };
+    });
 
-    res.json(result);
+    res.json(data);
   } catch (error) {
     console.error('获取系统资源详情失败:', error);
     res.status(500).json({ error: error.message });
@@ -961,70 +1025,93 @@ app.get('/api/statistics', async (req, res) => {
 // 获取消息流
 app.get('/api/messages/stream', async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit) || 100;
+    const limit = Math.min(parseInt(req.query.limit) || 100, 100);
     const agentId = req.query.agentId;
     const taskId = req.query.taskId;
-    
-    const agents = await collector.getAgentsList();
-    const messages = [];
+    const compact = req.query.compact !== '0';
+    const maxContentLength = compact ? 240 : 1000;
 
     // 如果指定了taskId，只返回该任务的消息
     if (taskId) {
-      const taskDetails = await collector.getTaskDetails(taskId);
+      const taskDetails = await withTimeout(() => collector.getTaskDetails(taskId), 10000, '任务消息流');
+      const taskMessages = (taskDetails.messages || []).slice(-limit).map((msg) => ({
+        ...msg,
+        content: typeof msg.content === 'string' && msg.content.length > maxContentLength
+          ? `${msg.content.slice(0, maxContentLength)}…`
+          : msg.content
+      }));
       return res.json({
-        messages: taskDetails.messages || [],
-        total: taskDetails.messageCount || 0
+        messages: taskMessages,
+        total: taskDetails.messageCount || 0,
+        limit,
+        compact
       });
     }
 
-    // 如果指定了agentId，只返回该Agent的消息
-    const targetAgents = agentId 
-      ? agents.filter(a => a.id === agentId)
-      : agents;
+    const cacheKey = makeCacheKey('api/messages/stream', { limit, agentId: agentId || 'all', compact: compact ? 1 : 0 });
+    const data = await getOrSetEndpointCache(cacheKey, 30000, async () => {
+      const agents = await collector.getAgentsList();
+      const messages = [];
 
-    for (const agent of targetAgents.slice(0, 10)) {
-      const agentDir = path.join(require('os').homedir(), '.openclaw', 'agents', agent.id, 'sessions');
-      try {
-        const files = await fsPromises.readdir(agentDir).catch(() => []);
-        const sessionFiles = files.filter(f => 
-          f.endsWith('.jsonl') && !f.includes('.deleted.')
-        ).slice(0, 5); // 每个Agent最多5个会话
+      const targetAgents = agentId
+        ? agents.filter(a => a.id === agentId)
+        : agents;
 
-        for (const file of sessionFiles) {
-          const filePath = path.join(agentDir, file);
-          const content = await fsPromises.readFile(filePath, 'utf-8').catch(() => '');
-          const lines = content.trim().split('\n').filter(l => l);
+      for (const agent of targetAgents.slice(0, 8)) {
+        const agentDir = path.join(require('os').homedir(), '.openclaw', 'agents', agent.id, 'sessions');
+        try {
+          const files = await fsPromises.readdir(agentDir).catch(() => []);
+          const sessionFiles = files
+            .filter(f => f.endsWith('.jsonl') && !f.includes('.deleted.'))
+            .slice(0, 3); // 每个Agent最多3个会话，避免侧栏扫描过重
 
-          for (const line of lines) {
-            try {
-              const message = JSON.parse(line);
-              messages.push({
-                ...message,
-                agentId: agent.id,
-                agentName: agent.name,
-                taskId: file.replace('.jsonl', ''),
-                timestamp: message.timestamp || new Date().toISOString()
-              });
-            } catch (e) {
-              // 忽略解析错误
+          for (const file of sessionFiles) {
+            const filePath = path.join(agentDir, file);
+            const content = await fsPromises.readFile(filePath, 'utf-8').catch(() => '');
+            const lines = content.trim().split('\n').filter(l => l);
+            const recentLines = lines.slice(-12); // 只看最近消息，避免把整段会话全塞进侧栏
+
+            for (const line of recentLines) {
+              try {
+                const message = JSON.parse(line);
+                const rawContent = message.content || message.text || message.message?.content || '';
+                const normalizedContent = typeof rawContent === 'string'
+                  ? rawContent
+                  : Array.isArray(rawContent)
+                    ? rawContent.map(part => part?.text || '').join('\n')
+                    : '';
+
+                messages.push({
+                  role: message.role || message.message?.role || 'unknown',
+                  content: normalizedContent.length > maxContentLength
+                    ? `${normalizedContent.slice(0, maxContentLength)}…`
+                    : normalizedContent,
+                  agentId: agent.id,
+                  agentName: agent.name,
+                  taskId: file.replace('.jsonl', ''),
+                  timestamp: message.timestamp || new Date().toISOString()
+                });
+              } catch (e) {
+                // 忽略解析错误
+              }
             }
           }
+        } catch (error) {
+          // 忽略Agent错误
         }
-      } catch (error) {
-        // 忽略Agent错误
       }
-    }
 
-    // 按时间排序
-    messages.sort((a, b) => 
-      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-    );
+      messages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
-    res.json({
-      messages: messages.slice(-limit),
-      total: messages.length,
-      limit
+      return {
+        messages: messages.slice(-limit),
+        total: messages.length,
+        limit,
+        compact
+      };
     });
+
+    res.json(data);
   } catch (error) {
     console.error('获取消息流失败:', error);
     res.status(500).json({ error: error.message });
