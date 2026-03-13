@@ -176,7 +176,14 @@ class Dashboard extends Disposable {
       this.updateAllPanels();
     } catch (error) {
       console.error('加载初始数据失败:', error);
-      this._showLoadingError();
+      // 如果有缓存数据，不显示错误
+      if (this.data && Object.keys(this.data).length > 0) {
+        this.updateAllPanels();
+      } else {
+        this._showLoadingError();
+        // 5秒后自动重试
+        this.addTimeout(() => this.loadInitialData(), 5000);
+      }
     }
   }
 
@@ -195,8 +202,16 @@ class Dashboard extends Disposable {
     this.updateCurrentTasks();
     this.updateChannelsStatus();
     this.updateTaskHistory();
-    this._maybeRefresh('modelUsage', 60000, () => this.updateModelUsageStats());
-    this._maybeRefresh('skillUsage', 60000, () => this.updateSkillUsageStats());
+
+    // 模型使用量和技能统计使用时段感知的更新频率
+    // 工作时间(8:00-24:00)每60秒，夜间(0:00-8:00)不更新
+    const hour = new Date().getHours();
+    const isNightTime = hour >= 0 && hour < 8;
+    const modelUsageInterval = isNightTime ? Infinity : 60000;
+    const skillUsageInterval = isNightTime ? Infinity : 60000;
+
+    this._maybeRefresh('modelUsage', modelUsageInterval, () => this.updateModelUsageStats());
+    this._maybeRefresh('skillUsage', skillUsageInterval, () => this.updateSkillUsageStats());
     this.updateLogs();
 
     if (window._sidebarManager) {
@@ -289,7 +304,8 @@ class Dashboard extends Disposable {
     if (!this.data.system) return;
     const system = this.data.system;
     const isRunning = system.gateway.status === 'running';
-    const cpuValue = parseFloat(system.gateway.cpu) || 0;
+    // 使用主机整体CPU使用率
+    const cpuValue = typeof system.hostCpu === 'number' ? system.hostCpu : (parseFloat(system.gateway.cpu) || 0);
     const memoryStr = system.gateway.memory || '0 KB';
     const memoryKB = parseFloat(memoryStr.replace(/[^\d.]/g, '')) || 0;
     const memoryMB = memoryStr.includes('KB') ? memoryKB / 1024 : memoryKB;
@@ -1248,7 +1264,7 @@ class Dashboard extends Disposable {
           window._searchManager.updateLogsCache(logs);
         } else {
           if (!Array.isArray(logs) || logs.length === 0) {
-            container.innerHTML = '<div class="empty-state">暂无日志</div>';
+            container.innerHTML = '<div class="empty-state">暂无日志记录</div>';
           } else {
             const html = logs.map(log => {
               const levelClass = log.level === 'error' ? 'log-error' : log.level === 'warn' ? 'log-warn' : 'log-info';
@@ -1263,11 +1279,13 @@ class Dashboard extends Disposable {
       } catch (error) {
         console.error('更新日志失败:', error);
         const container = document.getElementById('logContainer');
-        if (container) container.innerHTML = '<div class="empty-state" style="color: var(--error);">日志加载失败</div>';
+        if (container && !container.querySelector('.log-entry')) {
+          container.innerHTML = '<div class="empty-state">暂无日志记录</div>';
+        }
       } finally {
         this._logUpdatePending = false;
       }
-    }, 1000);
+    }, 500);
   }
 
   // --- Sidebar Panels ---

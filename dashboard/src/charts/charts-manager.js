@@ -73,24 +73,29 @@ export class ChartsManager extends Disposable {
               data: data.cpu || [],
               borderColor: 'rgb(239, 68, 68)',
               backgroundColor: 'rgba(239, 68, 68, 0.1)',
-              tension: 0.4, fill: true, yAxisID: 'y'
+              tension: 0.4, fill: true, yAxisID: 'y',
+              pointRadius: 0, pointHoverRadius: 3, borderWidth: 1.5
             },
             {
               label: '内存使用 (MB)',
               data: data.memory || [],
               borderColor: 'rgb(59, 130, 246)',
               backgroundColor: 'rgba(59, 130, 246, 0.1)',
-              tension: 0.4, fill: true, yAxisID: 'y1'
+              tension: 0.4, fill: true, yAxisID: 'y1',
+              pointRadius: 0, pointHoverRadius: 3, borderWidth: 1.5
             }
           ]
         },
         options: {
           responsive: true, maintainAspectRatio: false,
+          animation: false,
+          interaction: { mode: 'index', intersect: false },
           plugins: {
             title: { display: true, text: '性能趋势（最近24小时）', font: { size: 14 } },
             legend: { display: true, position: 'top' }
           },
           scales: {
+            x: { ticks: { maxTicksLimit: 12, font: { size: 10 } } },
             y: { type: 'linear', display: true, position: 'left', title: { display: true, text: 'CPU (%)' }, min: 0, max: 100 },
             y1: { type: 'linear', display: true, position: 'right', title: { display: true, text: '内存 (MB)' }, grid: { drawOnChartArea: false } }
           }
@@ -361,7 +366,7 @@ export class ChartsManager extends Disposable {
       data: data.byDay.map(day => day.counts[modelKey] || 0),
       borderColor: colors[i % colors.length],
       backgroundColor: bgColors[i % bgColors.length],
-      tension: 0.3, fill: true, pointRadius: 2, pointHoverRadius: 5, borderWidth: 2
+      tension: 0.3, fill: true, pointRadius: 0, pointHoverRadius: 4, borderWidth: 1.5
     }));
 
     if (!this.charts.modelUsageTrend) {
