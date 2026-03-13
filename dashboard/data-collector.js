@@ -168,12 +168,20 @@ class DataCollector {
       const uptime = os.uptime();
       const uptimeHours = Math.floor(uptime / 3600);
       const uptimeMinutes = Math.floor((uptime % 3600) / 60);
+
+      // 获取主机总内存(MB)
+      const totalMemoryMB = Math.round(os.totalmem() / 1024 / 1024);
+
+      // 获取主机整体CPU使用率
+      const hostCpu = this.getHostCpuUsage();
       
       const result = {
         hostname,
         platform,
         arch,
         nodeVersion,
+        totalMemory: totalMemoryMB,
+        hostCpu: Math.round(hostCpu * 10) / 10,
         gateway: {
           port: config?.gateway?.port || 18789,
           status: gatewayInfo ? 'running' : 'stopped',
@@ -210,6 +218,38 @@ class DataCollector {
 
     const normalized = cpuValue / cpuCores;
     return Math.min(100, Math.max(0, normalized));
+  }
+
+  // 获取主机整体CPU使用率（使用os.cpus()计算）
+  getHostCpuUsage() {
+    try {
+      const cpus = os.cpus();
+      if (!cpus || cpus.length === 0) return 0;
+
+      let totalIdle = 0;
+      let totalTick = 0;
+      for (const cpu of cpus) {
+        const { user, nice, sys, idle, irq } = cpu.times;
+        totalTick += user + nice + sys + idle + irq;
+        totalIdle += idle;
+      }
+
+      // 如果有上次的快照，计算增量
+      if (this._lastCpuSnapshot) {
+        const idleDelta = totalIdle - this._lastCpuSnapshot.idle;
+        const totalDelta = totalTick - this._lastCpuSnapshot.total;
+        this._lastCpuSnapshot = { idle: totalIdle, total: totalTick };
+        if (totalDelta > 0) {
+          return Math.min(100, Math.max(0, (1 - idleDelta / totalDelta) * 100));
+        }
+      }
+
+      this._lastCpuSnapshot = { idle: totalIdle, total: totalTick };
+      // 首次调用没有增量数据，返回瞬时值
+      return totalTick > 0 ? Math.min(100, Math.max(0, (1 - totalIdle / totalTick) * 100)) : 0;
+    } catch {
+      return 0;
+    }
   }
 
   // 获取进程信息
@@ -1083,42 +1123,64 @@ class DataCollector {
     try {
       const logFile = path.join(LOGS_DIR, 'gateway.err.log');
       const stats = await fs.stat(logFile).catch(() => null);
-      if (!stats) return [];
+      if (!stats || stats.size === 0) {
+        // 尝试备用日志文件
+        const altLogFile = path.join(LOGS_DIR, 'gateway.log');
+        const altStats = await fs.stat(altLogFile).catch(() => null);
+        if (!altStats || altStats.size === 0) {
+          const emptyLogs = [];
+          if (count <= 100) this._setCache('logs', emptyLogs);
+          return emptyLogs;
+        }
+        return this._readLogFile(altLogFile, altStats, count);
+      }
 
+      return this._readLogFile(logFile, stats, count);
+    } catch (error) {
+      console.error('读取日志失败:', error);
+      return [];
+    }
+  }
+
+  async _readLogFile(logFile, stats, count) {
+    try {
       // 只读取文件末尾部分（假设每行平均200字符）
       const estimatedBytes = count * 200;
       const startPos = Math.max(0, stats.size - estimatedBytes);
       
       const fileHandle = await fs.open(logFile, 'r');
-      const buffer = Buffer.alloc(stats.size - startPos);
-      await fileHandle.read(buffer, 0, buffer.length, startPos);
-      await fileHandle.close();
-      
-      const content = buffer.toString('utf-8');
-      const lines = content.split('\n').filter(l => l.trim());
-      
-      const recentLines = lines.slice(-count);
-      const logs = recentLines.map(line => {
-        const timestampMatch = line.match(/(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)/);
-        const timestamp = timestampMatch ? timestampMatch[1] : new Date().toISOString();
+      try {
+        const buffer = Buffer.alloc(stats.size - startPos);
+        await fileHandle.read(buffer, 0, buffer.length, startPos);
         
-        let level = 'info';
-        if (line.toLowerCase().includes('error')) level = 'error';
-        else if (line.toLowerCase().includes('warn')) level = 'warn';
+        const content = buffer.toString('utf-8');
+        const lines = content.split('\n').filter(l => l.trim());
         
-        return {
-          timestamp,
-          level,
-          message: line
-        };
-      });
-      
-      if (count <= 100) {
-        this._setCache('logs', logs);
+        const recentLines = lines.slice(-count);
+        const logs = recentLines.map(line => {
+          const timestampMatch = line.match(/(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)/);
+          const timestamp = timestampMatch ? timestampMatch[1] : new Date().toISOString();
+          
+          let level = 'info';
+          if (line.toLowerCase().includes('error')) level = 'error';
+          else if (line.toLowerCase().includes('warn')) level = 'warn';
+          
+          return {
+            timestamp,
+            level,
+            message: line
+          };
+        });
+        
+        if (count <= 100) {
+          this._setCache('logs', logs);
+        }
+        return logs;
+      } finally {
+        await fileHandle.close();
       }
-      return logs;
     } catch (error) {
-      console.error('读取日志失败:', error);
+      console.error('读取日志文件失败:', error);
       return [];
     }
   }
@@ -1189,14 +1251,14 @@ class DataCollector {
       const system = await this.getSystemOverview();
       const gatewayInfo = await this.getProcessInfo('openclaw-gateway');
       
-      // 解析CPU和内存
-      const cpu = gatewayInfo ? parseFloat(gatewayInfo.cpu.replace('%', '')) : 0;
+      // 使用主机整体CPU使用率
+      const hostCpu = this.getHostCpuUsage();
       const memoryKB = gatewayInfo ? parseInt(gatewayInfo.memory.replace(' KB', '')) : 0;
       const memoryMB = memoryKB / 1024;
 
       const metric = {
         timestamp: new Date().toISOString(),
-        cpu: cpu,
+        cpu: Math.round(hostCpu * 10) / 10,
         memory: memoryMB,
         gatewayStatus: system.gateway.status
       };
@@ -1224,18 +1286,46 @@ class DataCollector {
         return timestamp >= cutoffTime;
       });
 
+      // 降采样：每小时最多12个点（即5分钟一个点），最少保留48个点
+      const maxPoints = Math.max(Math.ceil(hours * 12), 48);
+      const downsampled = this._downsampleMetrics(filtered, maxPoints);
+
       return {
-        labels: filtered.map(item => {
+        labels: downsampled.map(item => {
           const date = new Date(item.timestamp);
           return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
         }),
-        cpu: filtered.map(item => item.cpu || 0),
-        memory: filtered.map(item => item.memory || 0)
+        cpu: downsampled.map(item => item.cpu || 0),
+        memory: downsampled.map(item => item.memory || 0)
       };
     } catch (error) {
       console.error('获取性能指标历史失败:', error);
       return { labels: [], cpu: [], memory: [] };
     }
+  }
+
+  // 降采样指标数据，按时间窗口取平均值
+  _downsampleMetrics(data, maxPoints) {
+    if (!data || data.length <= maxPoints) return data;
+
+    const bucketSize = Math.ceil(data.length / maxPoints);
+    const result = [];
+
+    for (let i = 0; i < data.length; i += bucketSize) {
+      const bucket = data.slice(i, i + bucketSize);
+      const avgCpu = bucket.reduce((sum, d) => sum + (d.cpu || 0), 0) / bucket.length;
+      const avgMem = bucket.reduce((sum, d) => sum + (d.memory || 0), 0) / bucket.length;
+      // 使用桶中间的时间戳
+      const midItem = bucket[Math.floor(bucket.length / 2)];
+      result.push({
+        timestamp: midItem.timestamp,
+        cpu: Math.round(avgCpu * 10) / 10,
+        memory: Math.round(avgMem * 10) / 10,
+        gatewayStatus: midItem.gatewayStatus
+      });
+    }
+
+    return result;
   }
 
   // 记录消息统计

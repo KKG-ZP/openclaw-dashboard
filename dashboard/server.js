@@ -336,18 +336,24 @@ function startWarmCacheLoop() {
   const scheduleNext = () => {
     warmCacheTimer = setTimeout(async () => {
       try {
-        const fingerprint = await runWarmCacheOnce();
-        const changed = fingerprint !== warmupLastFingerprint;
-        warmupLastFingerprint = fingerprint;
-
-        if (changed || hasRuntimeActivity()) {
-          warmupStableRounds = 0;
-          warmupCurrentIntervalMs = WARMUP_BASE_MS;
+        // 夜间（0:00-8:00）降低预热频率
+        const hour = new Date().getHours();
+        if (hour >= 0 && hour < 8) {
+          warmupCurrentIntervalMs = WARMUP_MAX_MS;
         } else {
-          warmupStableRounds += 1;
-          if (warmupStableRounds >= 2) {
-            warmupCurrentIntervalMs = Math.min(WARMUP_MAX_MS, warmupCurrentIntervalMs * 2);
+          const fingerprint = await runWarmCacheOnce();
+          const changed = fingerprint !== warmupLastFingerprint;
+          warmupLastFingerprint = fingerprint;
+
+          if (changed || hasRuntimeActivity()) {
             warmupStableRounds = 0;
+            warmupCurrentIntervalMs = WARMUP_BASE_MS;
+          } else {
+            warmupStableRounds += 1;
+            if (warmupStableRounds >= 2) {
+              warmupCurrentIntervalMs = Math.min(WARMUP_MAX_MS, warmupCurrentIntervalMs * 2);
+              warmupStableRounds = 0;
+            }
           }
         }
       } catch (error) {
@@ -456,6 +462,10 @@ let historyRecordInterval;
 function startHistoryRecording() {
   historyRecordInterval = setInterval(async () => {
     try {
+      // 夜间（0:00-8:00）不记录历史数据以节省资源
+      const hour = new Date().getHours();
+      if (hour >= 0 && hour < 8) return;
+
       // 并行记录所有历史数据
       await Promise.all([
         collector.recordMetricsHistory(),
@@ -467,7 +477,7 @@ function startHistoryRecording() {
     } catch (error) {
       console.error('记录历史数据失败:', error);
     }
-  }, 5000); // 每5秒记录一次
+  }, 30000); // 每30秒记录一次（从5秒改为30秒以减少IO和图表密度）
 }
 
 // 监控配置文件变化
