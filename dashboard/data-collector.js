@@ -1286,7 +1286,7 @@ class DataCollector {
         return timestamp >= cutoffTime;
       });
 
-      // 降采样：目标最多288个点（24小时按5分钟一个点）
+      // 降采样：每小时最多12个点（即5分钟一个点），最少保留48个点
       const maxPoints = Math.max(Math.ceil(hours * 12), 48);
       const downsampled = this._downsampleMetrics(filtered, maxPoints);
 

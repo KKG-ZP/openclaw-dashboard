@@ -477,7 +477,7 @@ function startHistoryRecording() {
     } catch (error) {
       console.error('记录历史数据失败:', error);
     }
-  }, 30000); // 每30秒记录一次（从5秒改为30秒，减少IO和图表密度）
+  }, 30000); // 每30秒记录一次（从5秒改为30秒以减少IO和图表密度）
 }
 
 // 监控配置文件变化
