@@ -1,0 +1,21 @@
+phases:
+  phase_1:
+    name: "低风险单任务"
+    duration_hours: 4
+    test_case: "simple_data_retrieval"
+    rollback_condition: "main_entry_unstable"
+  phase_2:
+    name: "多步骤研究任务"
+    duration_hours: 8
+    test_case: "knowledge_worker"
+    rollback_condition: "structured_output_loss"
+  phase_3:
+    name: "编码任务"
+    duration_hours: 12
+    test_case: "programmer"
+    rollback_condition: "coding_degradation"
+  phase_4:
+    name: "高风险边界任务"
+    duration_hours: 12
+    test_case: "c_class_boundary"
+    rollback_condition: "boundary_enforcement_lost"

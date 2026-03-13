@@ -1142,6 +1142,10 @@ class DataCollector {
       this.cacheTimestamps[key] = 0;
     });
     this.pendingSnapshotPromise = null;
+    this._modelUsageCache = null;
+    this._modelUsageCacheTime = 0;
+    this._skillUsageCache = null;
+    this._skillUsageCacheTime = 0;
   }
 
   // ========== 历史数据采集和存储 ==========

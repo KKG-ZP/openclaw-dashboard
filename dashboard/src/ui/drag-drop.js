@@ -1,202 +1,22 @@
 /**
- * UI/UX增强功能模块
- * 包括：主题切换、全屏、快捷键、响应式、动画、拖拽
+ * DragDropManager — 瀑布流布局 + 跟手拖拽
+ * 从 ui-enhancements.js 移植，使用 Disposable 管理所有事件/Observer 生命周期
  */
+import { Disposable } from '../core/disposable.js';
 
-class UIEnhancements {
+export class DragDropManager extends Disposable {
   constructor() {
-    this.currentTheme = 'light';
-    this.isFullscreen = false;
-    this.refreshInterval = 5000;
-    this.isPaused = false;
-    this.init();
-  }
-
-  init() {
-    this.loadTheme();
-    this.setupThemeToggle();
-    this.setupFullscreen();
-    this.setupKeyboardShortcuts();
-    this.setupRefreshControl();
-    this.setupDragAndDrop();
-    this.setupAnimations();
-    this.setupRightSidebarToggle();
-    this.setupMobileMonitorNav();
-  }
-
-  // ========== 主题切换 ==========
-  loadTheme() {
-    try {
-      const saved = localStorage.getItem('theme');
-      if (saved) {
-        this.currentTheme = saved;
-        this.applyTheme(saved);
-      }
-    } catch (error) {
-      console.error('加载主题失败:', error);
-    }
-  }
-
-  setupThemeToggle() {
-    const themeBtn = document.createElement('button');
-    themeBtn.className = 'theme-toggle-btn';
-    themeBtn.id = 'themeToggle';
-    themeBtn.innerHTML = this.currentTheme === 'dark' ? '☀️' : '🌙';
-    themeBtn.title = '切换主题';
-
-    const headerRight = document.querySelector('.header-right');
-    if (headerRight) {
-      headerRight.insertBefore(themeBtn, headerRight.firstChild);
-    }
-
-    themeBtn.addEventListener('click', () => {
-      this.toggleTheme();
-    });
-  }
-
-  toggleTheme() {
-    this.currentTheme = this.currentTheme === 'light' ? 'dark' : 'light';
-    this.applyTheme(this.currentTheme);
-    localStorage.setItem('theme', this.currentTheme);
-    
-    const themeBtn = document.getElementById('themeToggle');
-    if (themeBtn) {
-      themeBtn.innerHTML = this.currentTheme === 'dark' ? '☀️' : '🌙';
-    }
-  }
-
-  applyTheme(theme) {
-    document.documentElement.setAttribute('data-theme', theme);
-    
-    if (theme === 'dark') {
-      document.documentElement.style.setProperty('--bg-primary', '#1e293b');
-      document.documentElement.style.setProperty('--bg-secondary', '#0f172a');
-      document.documentElement.style.setProperty('--bg-card', '#1e293b');
-      document.documentElement.style.setProperty('--text-primary', '#f1f5f9');
-      document.documentElement.style.setProperty('--text-secondary', '#cbd5e1');
-      document.documentElement.style.setProperty('--text-muted', '#94a3b8');
-      document.documentElement.style.setProperty('--border-color', 'rgba(59, 130, 246, 0.3)');
-    } else {
-      document.documentElement.style.setProperty('--bg-primary', '#f5f7fa');
-      document.documentElement.style.setProperty('--bg-secondary', '#ffffff');
-      document.documentElement.style.setProperty('--bg-card', '#ffffff');
-      document.documentElement.style.setProperty('--text-primary', '#1e293b');
-      document.documentElement.style.setProperty('--text-secondary', '#64748b');
-      document.documentElement.style.setProperty('--text-muted', '#94a3b8');
-      document.documentElement.style.setProperty('--border-color', 'rgba(59, 130, 246, 0.2)');
-    }
-  }
-
-  // ========== 全屏功能 ==========
-  setupFullscreen() {
-    const fullscreenBtn = document.createElement('button');
-    fullscreenBtn.className = 'fullscreen-btn';
-    fullscreenBtn.id = 'fullscreenBtn';
-    fullscreenBtn.innerHTML = '⛶';
-    fullscreenBtn.title = '全屏 (F11)';
-
-    const headerRight = document.querySelector('.header-right');
-    if (headerRight) {
-      headerRight.insertBefore(fullscreenBtn, headerRight.firstChild);
-    }
-
-    fullscreenBtn.addEventListener('click', () => {
-      this.toggleFullscreen();
-    });
-
-    // 监听全屏状态变化
-    document.addEventListener('fullscreenchange', () => {
-      this.isFullscreen = !!document.fullscreenElement;
-      fullscreenBtn.innerHTML = this.isFullscreen ? '⛶' : '⛶';
-    });
-  }
-
-  toggleFullscreen() {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(err => {
-        console.error('进入全屏失败:', err);
-      });
-    } else {
-      document.exitFullscreen();
-    }
-  }
-
-  // ========== 快捷键支持 ==========
-  setupKeyboardShortcuts() {
-    document.addEventListener('keydown', (e) => {
-      // F5: 刷新数据
-      if (e.key === 'F5') {
-        e.preventDefault();
-        if (window.dashboard) {
-          window.dashboard.loadInitialData();
-        }
-      }
-
-      // Ctrl+F: 打开搜索
-      if (e.ctrlKey && e.key === 'f') {
-        e.preventDefault();
-        const globalSearch = document.getElementById('globalSearch');
-        if (globalSearch) {
-          globalSearch.focus();
-        }
-      }
-
-      // F11: 全屏切换
-      if (e.key === 'F11') {
-        e.preventDefault();
-        this.toggleFullscreen();
-      }
-
-      // Ctrl+T: 切换主题
-      if (e.ctrlKey && e.key === 't') {
-        e.preventDefault();
-        this.toggleTheme();
-      }
-
-      // Esc: 关闭模态框
-      if (e.key === 'Escape') {
-        const modals = document.querySelectorAll('.modal');
-        modals.forEach(modal => {
-          if (modal.style.display === 'block') {
-            modal.style.display = 'none';
-          }
-        });
-      }
-    });
-  }
-
-  // ========== 刷新控制 ==========
-  setupRefreshControl() {
-    const refreshBtn = document.createElement('button');
-    refreshBtn.className = 'refresh-control-btn';
-    refreshBtn.id = 'refreshControl';
-    refreshBtn.innerHTML = '⏸️';
-    refreshBtn.title = '暂停/恢复刷新';
-
-    const headerRight = document.querySelector('.header-right');
-    if (headerRight) {
-      headerRight.insertBefore(refreshBtn, headerRight.firstChild);
-    }
-
-    refreshBtn.addEventListener('click', () => {
-      this.togglePause();
-    });
-  }
-
-  togglePause() {
-    this.isPaused = !this.isPaused;
-    const btn = document.getElementById('refreshControl');
-    if (btn) {
-      btn.innerHTML = this.isPaused ? '▶️' : '⏸️';
-      btn.title = this.isPaused ? '恢复刷新' : '暂停刷新';
-    }
-  }
-
-  // ========== 瀑布流布局 + 跟手拖拽 ==========
-  setupDragAndDrop() {
+    super();
     this._drag = null;
     this._masonryEnabled = false;
+    this._layoutRAFPending = false;
+    this._lastCardWidths = new Map();
+    this._masonryGap = 20;
+    this._masonryMinCol = 350;
+    this._masonryMaxCols = 4;
+  }
 
+  setupDragAndDrop() {
     // 先恢复已保存的 DOM 顺序
     this.loadLayout();
 
@@ -214,16 +34,17 @@ class UIEnhancements {
   _bindDragEvents(grid) {
     if (!grid) grid = document.querySelector('.grid');
     if (!grid) return;
-    
+
     grid.querySelectorAll(':scope > .card[data-card-id]').forEach(card => {
       const header = card.querySelector('.card-header');
       if (!header) return;
       // 移除旧的事件监听器（如果有）
-      header.removeEventListener('mousedown', this._boundMouseDown);
+      if (header._dragHandler) {
+        header.removeEventListener('mousedown', header._dragHandler);
+      }
       // 绑定新的事件监听器
       const boundHandler = (e) => this._onMouseDown(e, card, grid);
-      header.addEventListener('mousedown', boundHandler);
-      // 保存引用以便后续移除
+      this.addListener(header, 'mousedown', boundHandler);
       header._dragHandler = boundHandler;
     });
   }
@@ -310,7 +131,7 @@ class UIEnhancements {
     btn.className = 'layout-reset-btn';
     btn.textContent = '↩ 重置布局';
     btn.title = '恢复默认卡片排列顺序';
-    btn.addEventListener('click', () => {
+    this.addListener(btn, 'click', () => {
       localStorage.removeItem('cardLayout');
       window.location.reload();
     });
@@ -322,11 +143,6 @@ class UIEnhancements {
 
   _initMasonry(grid) {
     this._masonryEnabled = true;
-    this._masonryGap = 20;
-    this._masonryMinCol = 350;
-    this._masonryMaxCols = 4;
-    this._layoutRAFPending = false;
-    this._lastCardWidths = new Map();   // 记录上一次布局中每张卡片的宽度
 
     // 首次布局：无动画
     grid.classList.add('masonry-active', 'masonry-no-transition');
@@ -340,24 +156,17 @@ class UIEnhancements {
 
     // 窗口 resize 时重新计算
     this._resizeHandler = this._debounce(() => this.layoutMasonry(), 80);
-    window.addEventListener('resize', this._resizeHandler);
+    this.addListener(window, 'resize', this._resizeHandler);
 
     // 卡片尺寸变化时重新计算（内容更新导致高度变化）
-    // 不再用 _isLayouting 标志压制，改用 _scheduleLayout 的 rAF 节流来避免过度计算。
-    // 即使 layoutMasonry 自己改 width 触发了 ResizeObserver，最坏情况也只是
-    // 多跑一次 layoutMasonry（第二次 width 不变 → 不再触发 → 自动收敛）。
-    this._contentObserver = new ResizeObserver((entries) => {
-      if (this._drag && this._drag.activated) return;      // 拖拽中不自动重排
+    this._contentObserver = this.addObserver(new ResizeObserver((entries) => {
+      if (this._drag && this._drag.activated) return;
 
-      // 检查是否有真正的高度变化（过滤掉纯 width 变化——那是我们自己设的）
       let hasHeightChange = false;
       for (const entry of entries) {
         const el = entry.target;
         const prev = this._lastCardWidths.get(el);
-        const curW = entry.contentRect.width;
         const curH = entry.contentRect.height;
-        // 如果宽度和上次一样，但高度变了 → 是内容驱动的变化
-        // 或者 prev 不存在（首次）→ 也需要重排
         if (!prev || Math.abs(prev.h - curH) > 1) {
           hasHeightChange = true;
           break;
@@ -366,13 +175,14 @@ class UIEnhancements {
       if (hasHeightChange) {
         this._scheduleLayout();
       }
-    });
+    }));
+
     grid.querySelectorAll(':scope > .card[data-card-id]').forEach(card => {
       this._contentObserver.observe(card);
     });
 
     // 额外保险：所有资源加载完毕后重排一次
-    window.addEventListener('load', () => this.layoutMasonry());
+    this.addListener(window, 'load', () => this.layoutMasonry());
   }
 
   /** 用 requestAnimationFrame 合并同一帧内的多次布局请求 */
@@ -400,7 +210,7 @@ class UIEnhancements {
       return;
     }
 
-    // 桌面大屏：固定两列(1:3)，左右列独立高度流，不互相对齐
+    // 桌面大屏：固定两列(1:3)
     if (window.matchMedia('(min-width: 1200px)').matches) {
       this._enableMasonryLayout(grid);
       this._layoutDesktopTwoColumn(grid);
@@ -423,10 +233,10 @@ class UIEnhancements {
     const items = Array.from(grid.querySelectorAll(
       ':scope > .card[data-card-id]:not(.drag-floating), :scope > .drag-placeholder'
     ));
-    
-    // 强制所有卡片重新计算高度（清除可能的缓存问题）
+
+    // 强制所有卡片重新计算高度
     items.forEach(item => {
-      item.style.height = 'auto'; // 清除之前可能的高度限制
+      item.style.height = 'auto';
     });
 
     items.forEach(item => {
@@ -470,7 +280,7 @@ class UIEnhancements {
 
     const gapX = 16;
     const rightGapY = 16;
-    const leftGapY = 16; // 左右列纵向间距一致
+    const leftGapY = 16;
 
     const leftW = Math.max(260, (containerWidth - gapX) * 0.25);
     const rightW = Math.max(0, containerWidth - gapX - leftW);
@@ -535,7 +345,6 @@ class UIEnhancements {
     grid.classList.add('masonry-disabled');
     grid.style.height = '';
 
-    // 清理瀑布流留下的定位样式，恢复文档流
     grid.querySelectorAll(':scope > .card[data-card-id], :scope > .drag-placeholder').forEach(item => {
       item.classList.remove('drag-floating');
       item.style.position = '';
@@ -611,7 +420,7 @@ class UIEnhancements {
 
     // 移除浮动样式
     card.classList.remove('drag-floating');
-    card.style.cssText = '';  // 清除所有内联样式，masonry 会重新设置
+    card.style.cssText = '';
     grid.classList.remove('is-dragging');
     document.body.classList.remove('is-dragging-card');
 
@@ -671,7 +480,7 @@ class UIEnhancements {
       const cy = r.top + r.height / 2;
       const dx = e.clientX - cx;
       const dy = e.clientY - cy;
-      const dist = dx * dx + dy * dy; // 无需开根号
+      const dist = dx * dx + dy * dy;
 
       if (dist < minDist) {
         minDist = dist;
@@ -734,7 +543,7 @@ class UIEnhancements {
         }
       });
 
-      // 再补上新增卡片（旧布局里没有的），避免出现“间隙不一致/位置异常”
+      // 再补上新增卡片（旧布局里没有的）
       grid.querySelectorAll(':scope > .card[data-card-id]').forEach(c => {
         const id = c.dataset.cardId;
         if (!appended.has(id)) {
@@ -743,7 +552,7 @@ class UIEnhancements {
         }
       });
 
-      // 若检测到布局缺失新卡片，自动写回一次，避免下次重复异常
+      // 若检测到布局缺失新卡片，自动写回一次
       if (appended.size !== order.length) {
         this.saveLayout();
       }
@@ -751,150 +560,4 @@ class UIEnhancements {
       console.error('加载布局失败:', err);
     }
   }
-
-  // ========== 右侧边栏切换 ==========
-  setupRightSidebarToggle() {
-    const toggle = document.getElementById('rightSidebarToggle');
-    const sidebar = document.getElementById('rightSidebar');
-    const overlay = document.getElementById('rightSidebarOverlay');
-    
-    if (toggle && sidebar) {
-      const openSidebar = () => {
-        sidebar.classList.remove('collapsed');
-        if (overlay && window.matchMedia('(max-width: 640px)').matches) {
-          overlay.classList.add('show');
-        }
-        toggle.textContent = '✕';
-        toggle.title = '隐藏侧边栏';
-      };
-
-      const closeSidebar = () => {
-        sidebar.classList.add('collapsed');
-        if (overlay) overlay.classList.remove('show');
-        toggle.textContent = '⚙️';
-        toggle.title = '显示侧边栏';
-      };
-
-      const syncByViewport = () => {
-        if (window.matchMedia('(max-width: 640px)').matches) {
-          closeSidebar();
-        } else {
-          sidebar.classList.remove('collapsed');
-          if (overlay) overlay.classList.remove('show');
-          toggle.textContent = '⚙️';
-          toggle.title = '显示/隐藏侧边栏';
-        }
-      };
-
-      toggle.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const isCollapsed = sidebar.classList.contains('collapsed');
-        if (isCollapsed) {
-          openSidebar();
-        } else {
-          closeSidebar();
-        }
-      });
-      
-      // 点击遮罩关闭侧边栏
-      if (overlay) {
-        overlay.addEventListener('click', () => {
-          closeSidebar();
-        });
-      }
-
-      syncByViewport();
-      window.addEventListener('resize', this._debounce(syncByViewport, 120));
-    }
-  }
-
-  // ========== 移动端监控导航 ==========
-  setupMobileMonitorNav() {
-    const nav = document.getElementById('mobileMonitorNav');
-    if (!nav) return;
-
-    const buttons = Array.from(nav.querySelectorAll('.mobile-monitor-nav-btn'));
-    if (buttons.length === 0) return;
-
-    const setActive = (targetId) => {
-      buttons.forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.target === targetId);
-      });
-    };
-
-    buttons.forEach(btn => {
-      btn.addEventListener('click', () => {
-        const targetId = btn.dataset.target;
-        if (!targetId) return;
-
-        let target = document.querySelector(`.card[data-card-id="${targetId}"]`) || document.getElementById(targetId);
-        if (!target) return;
-
-        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        setActive(targetId);
-      });
-    });
-
-    const observerTargets = buttons
-      .map(btn => document.querySelector(`.card[data-card-id="${btn.dataset.target}"]`) || document.getElementById(btn.dataset.target))
-      .filter(Boolean);
-
-    if (observerTargets.length > 0 && 'IntersectionObserver' in window) {
-      const observer = new IntersectionObserver((entries) => {
-        const visible = entries
-          .filter(entry => entry.isIntersecting)
-          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
-        if (visible[0]) {
-          const targetId = visible[0].target.dataset.cardId || visible[0].target.id;
-          if (targetId) setActive(targetId);
-        }
-      }, { threshold: [0.35, 0.6] });
-
-      observerTargets.forEach(el => observer.observe(el));
-    }
-
-    setActive(buttons[0].dataset.target);
-  }
-
-  // ========== 动画增强 ==========
-  setupAnimations() {
-    // 添加页面过渡动画
-    document.body.style.transition = 'opacity 0.3s ease-in-out';
-
-    // 卡片进入动画
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          entry.target.style.animation = 'fadeInUp 0.5s ease-out';
-          observer.unobserve(entry.target);
-        }
-      });
-    }, { threshold: 0.1 });
-
-    document.querySelectorAll('.card').forEach(card => {
-      observer.observe(card);
-    });
-
-    // 添加CSS动画
-    if (!document.getElementById('uiAnimations')) {
-      const style = document.createElement('style');
-      style.id = 'uiAnimations';
-      style.textContent = `
-        @keyframes fadeInUp {
-          from {
-            opacity: 0;
-            transform: translateY(20px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-      `;
-      document.head.appendChild(style);
-    }
-  }
 }
-
-// 创建全局UI增强实例
-window.uiEnhancements = new UIEnhancements();

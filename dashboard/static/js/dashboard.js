@@ -5,7 +5,7 @@ class Dashboard {
     this.data = {};
     this.panelRefreshState = {
       modelUsage: 0,
-      skillUsage: 0,
+
       resources: 0,
       alerts: 0,
       statistics: 0,
@@ -216,15 +216,6 @@ class Dashboard {
       }
       const data = await response.json();
       console.log('[前端] 加载的完整数据:', data);
-      console.log('[前端] 模型数据:', data.models);
-      
-      // 详细打印每个模型的配额信息
-      if (data.models && data.models.length > 0) {
-        console.log('[前端] 模型配额详情:');
-        data.models.forEach(m => {
-          console.log(`  ${m.provider} - ${m.modelName || m.modelId || m.name || '未知模型'}: quotaUsed=${m.quotaUsed} (${typeof m.quotaUsed}), quotaTotal=${m.quotaTotal} (${typeof m.quotaTotal})`);
-        });
-      }
       
       this.data = data;
       this.updateAllPanels();
@@ -276,9 +267,8 @@ class Dashboard {
       'agentsList',
       'currentTasks',
       'channelsStatus',
-      'modelsQuota',
       'taskHistory',
-      'skillUsageStats',
+
       'logContainer'
     ];
     
@@ -302,10 +292,9 @@ class Dashboard {
     this.updateAgentsList();
     this.updateCurrentTasks();
     this.updateChannelsStatus();
-    this.updateModelsQuota();
     this.updateTaskHistory();
     this.maybeRefreshAsyncPanel('modelUsage', 60000, () => this.updateModelUsageStats());
-    this.maybeRefreshAsyncPanel('skillUsage', 60000, () => this.updateSkillUsageStats());
+
     this.updateLogs();
     
     // 更新侧边栏布局的特定面板
@@ -1136,225 +1125,6 @@ class Dashboard {
     return icons[name.toLowerCase()] || '📡';
   }
 
-  // 更新模型配额
-  updateModelsQuota() {
-    if (!this.data.models || this.data.models.length === 0) {
-      const mq = document.getElementById('modelsQuota');
-      if (mq) mq.innerHTML = '<div class="empty-state">暂无模型信息</div>';
-      return;
-    }
-
-    // 调试：打印模型数据
-    console.log('[前端] 模型数据:', this.data.models);
-    console.log('[前端] 模型数量:', this.data.models.length);
-
-    // 按提供商分组模型
-    const providerGroups = {};
-    this.data.models.forEach(model => {
-      const provider = model.provider || 'unknown';
-      const quotaUsed = Number(model.quotaUsed) || 0;
-      const quotaTotal = Number(model.quotaTotal) || 0;
-      
-      console.log(`[前端] 处理模型: ${model.name}, 提供商: ${provider}, quotaUsed=${quotaUsed} (${typeof model.quotaUsed}), quotaTotal=${quotaTotal} (${typeof model.quotaTotal})`);
-      
-      if (!providerGroups[provider]) {
-        // 初始化时使用第一个模型的配额信息
-        providerGroups[provider] = {
-          provider: provider,
-          models: [],
-          quotaUsed: quotaUsed,
-          quotaTotal: quotaTotal,
-          quotaExtra: model.quotaExtra
-        };
-        console.log(`[前端] 初始化提供商 ${provider}: quotaUsed=${quotaUsed}, quotaTotal=${quotaTotal}`);
-      } else {
-        // 同一提供商的模型共享配额，使用最大的配额值（通常所有模型的值相同）
-        // 优先使用非零值
-        if (quotaTotal > 0 && providerGroups[provider].quotaTotal === 0) {
-          providerGroups[provider].quotaTotal = quotaTotal;
-          providerGroups[provider].quotaUsed = quotaUsed;
-          console.log(`[前端] 更新提供商 ${provider} 配额: quotaUsed=${quotaUsed}, quotaTotal=${quotaTotal}`);
-        } else if (quotaTotal > 0 && quotaTotal !== providerGroups[provider].quotaTotal) {
-          // 如果配额值不同，使用较大的值
-          if (quotaTotal > providerGroups[provider].quotaTotal) {
-            providerGroups[provider].quotaTotal = quotaTotal;
-            providerGroups[provider].quotaUsed = quotaUsed;
-            console.log(`[前端] 更新提供商 ${provider} 配额（使用较大值）: quotaUsed=${quotaUsed}, quotaTotal=${quotaTotal}`);
-          }
-        }
-      }
-      providerGroups[provider].models.push(model);
-    });
-    
-    console.log('[前端] 分组后的提供商:', Object.keys(providerGroups));
-    console.log('[前端] 分组数据:', providerGroups);
-
-    // 生成 HTML
-    const html = Object.values(providerGroups).map(group => {
-      // 确保转换为数字类型
-      const quotaUsed = Number(group.quotaUsed) || 0;
-      const quotaTotal = Number(group.quotaTotal) || 0;
-      const quotaRemaining = quotaTotal > 0 ? quotaTotal - quotaUsed : 0;
-      const quotaPercentage = quotaTotal > 0 ? ((quotaUsed / quotaTotal) * 100).toFixed(1) : 0;
-      
-      console.log(`[前端] 生成HTML - 提供商 ${group.provider}: quotaUsed=${quotaUsed}, quotaTotal=${quotaTotal}, quotaRemaining=${quotaRemaining}, quotaPercentage=${quotaPercentage}`);
-      
-      // 根据配额使用率设置颜色和样式
-      const totalNum = Number(quotaTotal);
-      const usedNum = Number(quotaUsed);
-      const remaining = totalNum > 0 ? totalNum - usedNum : 0;
-      const percentage = totalNum > 0 ? ((usedNum / totalNum) * 100).toFixed(1) : 0;
-      
-      // 判断提供商类型
-      const isMiniMaxCoding = group.provider === 'minimax-coding';
-      const isMoonshot = group.provider.includes('moonshot') || group.provider.includes('kimi');
-      
-      // 判断是余额（USD）还是调用次数
-      const isBalance = isMoonshot || (totalNum < 10000 && (totalNum % 1 !== 0 || usedNum % 1 !== 0));
-      const unit = isMiniMaxCoding ? ' prompts' : (isBalance ? ' USD' : ' 次');
-      
-      let quotaColor = '#10b981'; // 绿色 - 正常
-      let quotaBgColor = 'rgba(16, 185, 129, 0.1)';
-      let quotaStatus = '充足';
-      let progressColor = '#10b981';
-      
-      if (totalNum > 0) {
-        if (percentage >= 90) {
-          quotaColor = '#ef4444'; // 红色 - 危险
-          quotaBgColor = 'rgba(239, 68, 68, 0.1)';
-          quotaStatus = '不足';
-          progressColor = '#ef4444';
-        } else if (percentage >= 70) {
-          quotaColor = '#f59e0b'; // 黄色 - 警告
-          quotaBgColor = 'rgba(245, 158, 11, 0.1)';
-          quotaStatus = '较低';
-          progressColor = '#f59e0b';
-        }
-      }
-      
-      console.log(`[前端] 提供商 ${group.provider} 配额检查: totalNum=${totalNum}, usedNum=${usedNum}, remaining=${remaining}`);
-
-      // 列出该提供商下的所有模型
-      const modelsList = group.models.map(m => m.name || m.modelName || m.modelId || m.model || '未知模型').join('、');
-      const maxContextWindow = Math.max(...group.models.map(m => m.contextWindow || 0));
-      
-      // 生成余额显示 HTML
-      let quotaHtml = '';
-      
-      if (isMiniMaxCoding && totalNum > 0) {
-        // Minimax Coding Plan 特殊显示
-        const remainsTimeMs = Number(group.quotaExtra) || 0;
-        const remainsHours = Math.floor(remainsTimeMs / (1000 * 60 * 60));
-        const remainsMins = Math.floor((remainsTimeMs % (1000 * 60 * 60)) / (1000 * 60));
-        const timeDisplay = remainsTimeMs > 0 ? `${remainsHours}小时 ${remainsMins}分钟` : '计算中...';
-        
-        // 时间进度（5小时窗口 = 18000000ms）
-        const timePercentage = remainsTimeMs > 0 ? Math.min(100, (remainsTimeMs / 18000000) * 100).toFixed(1) : 0;
-        
-        quotaHtml = `
-          <div style="margin-top: 10px; padding: 14px; background: linear-gradient(135deg, ${quotaBgColor}, rgba(99, 102, 241, 0.1)); border-radius: 10px; border-left: 4px solid ${quotaColor};">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-              <span style="font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 6px;">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${quotaColor}" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-                Coding Plan
-              </span>
-              <span style="padding: 2px 10px; background: ${quotaColor}; color: white; border-radius: 12px; font-size: 0.75em; font-weight: 600;">${quotaStatus}</span>
-            </div>
-            
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
-              <div style="background: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px;">
-                <div style="font-size: 0.75em; color: var(--text-secondary); margin-bottom: 4px;">剩余 Prompts</div>
-                <div style="font-size: 1.4em; font-weight: 700; color: ${quotaColor};">${remaining}</div>
-                <div style="font-size: 0.7em; color: var(--text-secondary);">/ ${totalNum} 总量</div>
-              </div>
-              <div style="background: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px;">
-                <div style="font-size: 0.75em; color: var(--text-secondary); margin-bottom: 4px;">窗口剩余时间</div>
-                <div style="font-size: 1.1em; font-weight: 600; color: #6366f1;">${timeDisplay}</div>
-                <div style="font-size: 0.7em; color: var(--text-secondary);">5小时滚动窗口</div>
-              </div>
-            </div>
-            
-            <div style="margin-bottom: 8px;">
-              <div style="display: flex; justify-content: space-between; font-size: 0.75em; color: var(--text-secondary); margin-bottom: 3px;">
-                <span>Prompt 使用率</span>
-                <span>${percentage}%</span>
-              </div>
-              <div style="background: rgba(0,0,0,0.15); border-radius: 4px; height: 6px; overflow: hidden;">
-                <div style="width: ${percentage}%; height: 100%; background: ${progressColor}; border-radius: 4px; transition: width 0.3s;"></div>
-              </div>
-            </div>
-            
-            <div style="font-size: 0.7em; color: var(--text-secondary); padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.1);">
-              <span style="opacity: 0.8;">💡 提示：1 prompt ≈ 15 次 API 调用，额度每 5 小时动态重置</span>
-            </div>
-          </div>
-        `;
-      } else if (totalNum > 0) {
-        // 通用余额显示（Moonshot 等）
-        let extraInfo = '';
-        if (isBalance) {
-          extraInfo = `<div style="font-size: 0.7em; color: var(--text-secondary); margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.1);">按 token 使用量计费</div>`;
-        }
-        
-        quotaHtml = `
-          <div style="margin-top: 10px; padding: 12px; background: ${quotaBgColor}; border-radius: 8px; border-left: 4px solid ${quotaColor};">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-              <span style="font-weight: 600; color: var(--text-primary);">余额状态</span>
-              <span style="padding: 2px 8px; background: ${quotaColor}; color: white; border-radius: 4px; font-size: 0.75em; font-weight: 600;">${quotaStatus}</span>
-            </div>
-            <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px;">
-              <span style="font-size: 1.5em; font-weight: 700; color: ${quotaColor};">${remaining.toLocaleString('zh-CN', { maximumFractionDigits: isBalance ? 2 : 0 })}${unit}</span>
-              <span style="color: var(--text-secondary); font-size: 0.9em;">/ ${totalNum.toLocaleString('zh-CN', { maximumFractionDigits: isBalance ? 2 : 0 })}${unit}</span>
-            </div>
-            <div style="background: rgba(0,0,0,0.1); border-radius: 4px; height: 6px; overflow: hidden;">
-              <div style="width: ${percentage}%; height: 100%; background: ${progressColor}; border-radius: 4px; transition: width 0.3s;"></div>
-            </div>
-            <div style="text-align: right; font-size: 0.8em; color: var(--text-secondary); margin-top: 4px;">已使用 ${percentage}%</div>
-            ${extraInfo}
-          </div>
-        `;
-      } else {
-        // 余额未配置时仍显示提供商和模型列表（不显示配额部分）
-        return `
-      <div class="status-item">
-        <span class="status-label">${group.provider}</span>
-        <span class="badge badge-green">正常</span>
-      </div>
-      <div style="font-size: 0.85em; color: var(--text-secondary); margin-left: 10px; margin-bottom: 15px; line-height: 1.5; min-width: 0;">
-        <div style="margin-bottom: 5px; word-break: break-word; overflow-wrap: anywhere;">
-          <strong>模型:</strong> ${modelsList}
-        </div>
-        <div style="margin-bottom: 5px;">
-          最大上下文窗口: ${maxContextWindow.toLocaleString()}
-        </div>
-        <div style="font-size: 0.75em; color: var(--text-muted); padding: 8px; background: rgba(0,0,0,0.03); border-radius: 6px; margin-top: 8px;">
-          💡 配额信息暂不可用
-        </div>
-      </div>
-    `;
-      }
-      
-      return `
-      <div class="status-item">
-        <span class="status-label">${group.provider}</span>
-        <span class="badge badge-green">正常</span>
-      </div>
-      <div style="font-size: 0.85em; color: var(--text-secondary); margin-left: 10px; margin-bottom: 15px; line-height: 1.5; min-width: 0;">
-        <div style="margin-bottom: 5px; word-break: break-word; overflow-wrap: anywhere;">
-          <strong>模型:</strong> ${modelsList}
-        </div>
-        <div style="margin-bottom: 5px;">
-          最大上下文窗口: ${maxContextWindow.toLocaleString()}
-        </div>
-        ${quotaHtml}
-      </div>
-    `;
-    }).join('');
-    
-    const mqPanel = document.getElementById('modelsQuota');
-    if (mqPanel) mqPanel.innerHTML = html;
-  }
-
   // 更新任务历史
   updateTaskHistory() {
     if (!this.data.tasks || !this.data.tasks.history || this.data.tasks.history.length === 0) {
@@ -1946,6 +1716,10 @@ class Dashboard {
           <div style="height: 200px; position: relative;">
             <canvas id="modelUsageTrendCanvas"></canvas>
           </div>
+          <h4 style="margin: 16px 0 12px; font-size: 0.95em; color: var(--text-primary);">每日 Token 趋势</h4>
+          <div style="height: 200px; position: relative;">
+            <canvas id="modelTokenTrendCanvas"></canvas>
+          </div>
           <div class="mu-trend-grid" style="margin-top: 14px; display:flex; flex-wrap:wrap; gap:12px; align-items:flex-start;">
             <div style="flex:1 1 320px; min-width:300px; padding: 12px; border-radius: 10px; border: 1px solid rgba(59,130,246,0.15); background: rgba(59,130,246,0.03);">
               <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; gap:8px; flex-wrap:wrap;">
@@ -1982,6 +1756,7 @@ class Dashboard {
       // 渲染趋势图表
       if (window.chartsManager && data.byDay.length > 0) {
         window.chartsManager.renderModelUsageTrend(data);
+        window.chartsManager.renderModelTokenTrend(data);
       }
 
       // 异步内容加载完毕，直接重排瀑布流
@@ -1992,97 +1767,6 @@ class Dashboard {
     } catch (error) {
       console.error('更新模型使用量统计失败:', error);
       container.innerHTML = '<div class="empty-state" style="color: var(--error);">加载模型使用量失败</div>';
-    }
-  }
-
-  // 更新技能使用统计面板
-  async updateSkillUsageStats() {
-    const container = document.getElementById('skillUsageStats');
-    if (!container) return;
-
-    const rangeSelect = document.getElementById('skillUsageRange');
-    const selectedValue = rangeSelect ? rangeSelect.value : '7';
-    const daysParam = selectedValue ? `days=${selectedValue}` : '';
-
-    if (rangeSelect && !rangeSelect._bound) {
-      rangeSelect._bound = true;
-      rangeSelect.addEventListener('change', () => {
-        this.panelRefreshState.skillUsage = 0;
-        this.updateSkillUsageStats();
-      });
-    }
-
-    try {
-      const response = await fetch(`/api/skills/usage?${daysParam}`);
-      if (!response.ok) throw new Error(`HTTP错误: ${response.status}`);
-
-      const data = await response.json();
-      const summary = data.summary || {};
-      const reads = data.skillReads || [];
-      const execs = data.skillExecs || [];
-      const findings = data.findings || [];
-
-      const summaryCards = `
-        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:10px; margin-bottom: 14px;">
-          <div style="padding:12px; border-radius:10px; background:rgba(59,130,246,0.08); border:1px solid rgba(59,130,246,0.2); text-align:center;">
-            <div style="font-size:1.35em; font-weight:700; color:#3b82f6;">${(summary.totalToolCalls || 0).toLocaleString()}</div>
-            <div style="font-size:0.78em; color:var(--text-secondary);">总工具调用</div>
-          </div>
-          <div style="padding:12px; border-radius:10px; background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.2); text-align:center;">
-            <div style="font-size:1.35em; font-weight:700; color:#10b981;">${(summary.skillReads || 0).toLocaleString()}</div>
-            <div style="font-size:0.78em; color:var(--text-secondary);">技能说明读取</div>
-          </div>
-          <div style="padding:12px; border-radius:10px; background:rgba(139,92,246,0.08); border:1px solid rgba(139,92,246,0.2); text-align:center;">
-            <div style="font-size:1.35em; font-weight:700; color:#8b5cf6;">${(summary.skillExecs || 0).toLocaleString()}</div>
-            <div style="font-size:0.78em; color:var(--text-secondary);">技能实际执行</div>
-          </div>
-          <div style="padding:12px; border-radius:10px; background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.2); text-align:center;">
-            <div style="font-size:1.35em; font-weight:700; color:#f59e0b;">${summary.execSkillUsageRate || 0}%</div>
-            <div style="font-size:0.78em; color:var(--text-secondary);">exec技能命中率</div>
-          </div>
-        </div>
-      `;
-
-      const renderList = (arr, emptyText) => {
-        if (!arr || arr.length === 0) {
-          return `<div class="empty-state">${emptyText}</div>`;
-        }
-        return arr.slice(0, 8).map(item => `
-          <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 10px; background:var(--bg-secondary); border-radius:8px; margin-bottom:6px;">
-            <span style="font-size:0.86em; color:var(--text-primary);">${item.name}</span>
-            <span style="font-size:0.82em; color:var(--text-secondary); font-weight:600;">${item.count}</span>
-          </div>
-        `).join('');
-      };
-
-      const findingsHtml = findings.length > 0
-        ? `<div style="margin-top:12px; padding:10px; border-radius:10px; border:1px solid rgba(239,68,68,0.18); background:rgba(239,68,68,0.04);">
-            <div style="font-size:0.84em; font-weight:600; color:#ef4444; margin-bottom:6px;">⚠️ 待改进</div>
-            ${findings.map(f => `<div style="font-size:0.8em; color:var(--text-secondary); margin-bottom:4px;">• ${f}</div>`).join('')}
-          </div>`
-        : `<div style="margin-top:12px; padding:10px; border-radius:10px; border:1px solid rgba(16,185,129,0.18); background:rgba(16,185,129,0.04); font-size:0.82em; color:#10b981;">✅ 统计窗口内未发现技能使用缺口</div>`;
-
-      container.innerHTML = `
-        ${summaryCards}
-        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:12px;">
-          <div style="padding:12px; border-radius:10px; border:1px solid rgba(59,130,246,0.18); background:rgba(59,130,246,0.03);">
-            <div style="font-size:0.9em; font-weight:600; color:var(--text-primary); margin-bottom:8px;">📘 技能说明读取</div>
-            ${renderList(reads, '暂无读取记录')}
-          </div>
-          <div style="padding:12px; border-radius:10px; border:1px solid rgba(139,92,246,0.18); background:rgba(139,92,246,0.03);">
-            <div style="font-size:0.9em; font-weight:600; color:var(--text-primary); margin-bottom:8px;">⚙️ 技能实际执行</div>
-            ${renderList(execs, '暂无执行记录')}
-          </div>
-        </div>
-        ${findingsHtml}
-      `;
-
-      if (window.uiEnhancements && window.uiEnhancements.layoutMasonry) {
-        window.uiEnhancements.layoutMasonry();
-      }
-    } catch (error) {
-      console.error('更新技能使用统计失败:', error);
-      container.innerHTML = '<div class="empty-state" style="color: var(--error);">加载技能统计失败</div>';
     }
   }
 

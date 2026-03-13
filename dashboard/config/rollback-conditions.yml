@@ -1,0 +1,5 @@
+rollback_triggers:
+  main_entry_unstable: "TUI cannot connect or reply"
+  boundary_enforcement_lost: "C class task executed without review gate"
+  coding_degradation: "coding task loses structured closure"
+  structured_output_loss: "multi-step task loses phased output"

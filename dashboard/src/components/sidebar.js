@@ -1,9 +1,11 @@
 /**
- * 侧边栏导航功能
+ * 侧边栏导航 — ES module 化
  */
+import { Disposable } from '../core/disposable.js';
 
-class SidebarManager {
+export class SidebarManager extends Disposable {
   constructor() {
+    super();
     this.currentPanel = 'overview';
     this.panelTitles = {
       overview: { title: '系统概览', subtitle: '实时监控系统状态和性能指标' },
@@ -30,15 +32,11 @@ class SidebarManager {
   }
 
   setupEventListeners() {
-    // 侧边栏菜单点击
-    const menuLinks = document.querySelectorAll('.sidebar-menu-link');
-    menuLinks.forEach(link => {
-      link.addEventListener('click', (e) => {
+    document.querySelectorAll('.sidebar-menu-link').forEach(link => {
+      this.addListener(link, 'click', (e) => {
         e.preventDefault();
         const panel = link.dataset.panel;
-        if (panel) {
-          this.switchPanel(panel);
-        }
+        if (panel) this.switchPanel(panel);
       });
     });
   }
@@ -47,41 +45,34 @@ class SidebarManager {
     const toggle = document.getElementById('sidebarToggle');
     const overlay = document.getElementById('sidebarOverlay');
     const sidebar = document.getElementById('sidebar');
-
-    if (toggle) {
-      toggle.addEventListener('click', () => {
+    if (toggle && sidebar) {
+      this.addListener(toggle, 'click', () => {
         sidebar.classList.toggle('open');
-        overlay.classList.toggle('show');
+        if (overlay) overlay.classList.toggle('show');
       });
     }
-
     if (overlay) {
-      overlay.addEventListener('click', () => {
-        sidebar.classList.remove('open');
+      this.addListener(overlay, 'click', () => {
+        if (sidebar) sidebar.classList.remove('open');
         overlay.classList.remove('show');
       });
     }
 
     // 点击菜单项后关闭侧边栏（移动端）
-    const menuLinks = document.querySelectorAll('.sidebar-menu-link');
-    menuLinks.forEach(link => {
-      link.addEventListener('click', () => {
+    document.querySelectorAll('.sidebar-menu-link').forEach(link => {
+      this.addListener(link, 'click', () => {
         if (window.innerWidth <= 1024) {
-          sidebar.classList.remove('open');
-          overlay.classList.remove('show');
+          if (sidebar) sidebar.classList.remove('open');
+          if (overlay) overlay.classList.remove('show');
         }
       });
     });
   }
 
   switchPanel(panelId) {
-    // 隐藏所有面板
-    const panels = document.querySelectorAll('.content-panel');
-    panels.forEach(panel => {
+    document.querySelectorAll('.content-panel').forEach(panel => {
       panel.classList.remove('active');
     });
-
-    // 显示目标面板
     const targetPanel = document.getElementById(`panel-${panelId}`);
     if (targetPanel) {
       targetPanel.classList.add('active');
@@ -103,21 +94,14 @@ class SidebarManager {
   }
 
   updateActiveMenu(panelId) {
-    const menuLinks = document.querySelectorAll('.sidebar-menu-link');
-    menuLinks.forEach(link => {
+    document.querySelectorAll('.sidebar-menu-link').forEach(link => {
       link.classList.remove('active');
-      if (link.dataset.panel === panelId) {
-        link.classList.add('active');
-      }
+      if (link.dataset.panel === panelId) link.classList.add('active');
     });
   }
 
   savePanel(panelId) {
-    try {
-      localStorage.setItem('lastPanel', panelId);
-    } catch (error) {
-      console.error('保存面板状态失败:', error);
-    }
+    try { localStorage.setItem('lastPanel', panelId); } catch (e) { /* ignore */ }
   }
 
   loadSavedPanel() {
@@ -128,13 +112,11 @@ class SidebarManager {
       } else {
         this.switchPanel('overview');
       }
-    } catch (error) {
-      console.error('加载面板状态失败:', error);
+    } catch (e) {
       this.switchPanel('overview');
     }
   }
 
-  // 更新徽章
   updateBadge(badgeId, count) {
     const badge = document.getElementById(badgeId);
     if (badge) {
@@ -147,27 +129,3 @@ class SidebarManager {
     }
   }
 }
-
-// 创建全局侧边栏管理器
-window.sidebarManager = new SidebarManager();
-
-// 更新徽章的函数（供dashboard.js调用）
-window.updateSidebarBadges = function(data) {
-  if (!window.sidebarManager) return;
-  
-  // 更新健康度徽章
-  if (data.health) {
-    const score = data.health.score || 0;
-    window.sidebarManager.updateBadge('healthBadge', score < 80 ? 1 : 0);
-  }
-  
-  // 更新告警徽章
-  if (data.alerts && Array.isArray(data.alerts)) {
-    window.sidebarManager.updateBadge('alertsBadge', data.alerts.length);
-  }
-  
-  // 更新任务徽章
-  if (data.tasks && data.tasks.current) {
-    window.sidebarManager.updateBadge('tasksBadge', data.tasks.current.length);
-  }
-};

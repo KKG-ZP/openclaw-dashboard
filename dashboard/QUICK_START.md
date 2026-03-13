@@ -2,31 +2,41 @@
 
 文中的 **<项目目录>** 指 dashboard 项目根目录（即包含 `server.js` 的目录）。
 
-## ⚠️ 重要提示
-
-由于macOS安全限制，**服务器必须在终端前台运行**，不能使用后台运行（`&` 或 `nohup`）。
-
 ## 启动步骤
 
-### 方法1：使用启动脚本（推荐）
+### 方法1：后台常驻运行（推荐）
+
+```bash
+cd <项目目录>
+./start-server.sh --daemon
+```
+
+安装后常用命令：
+
+```bash
+systemctl --user status openclaw-dashboard
+journalctl --user -u openclaw-dashboard -f
+```
+
+如需卸载服务：
+
+```bash
+cd <项目目录>
+./scripts/uninstall-user-service.sh
+```
+
+### 方法2：前台运行（调试）
 
 ```bash
 cd <项目目录>
 ./start-server.sh
 ```
 
-### 方法2：直接使用npm
+### 方法3：直接使用npm
 
 ```bash
 cd <项目目录>
 npm start
-```
-
-### 方法3：直接运行Node.js
-
-```bash
-cd <项目目录>
-node server.js
 ```
 
 ## 验证服务器运行
@@ -39,7 +49,7 @@ node server.js
 CSS文件存在: true
 
 🎩 OpenClaw作战指挥中心看板服务器
-   访问地址: http://localhost:3000
+   访问地址: http://127.0.0.1:44132
 ```
 
 ## 测试
@@ -48,17 +58,26 @@ CSS文件存在: true
 
 ```bash
 # 测试首页
-curl http://localhost:3000
+curl http://127.0.0.1:44132/dashboard
 
 # 测试CSS文件
-curl -I http://localhost:3000/static/css/style.css
+curl -I http://127.0.0.1:44132/static/css/style.css
 
 # 应该返回: HTTP/1.1 200 OK
 ```
 
 ## 访问看板
 
-在浏览器中打开：`http://localhost:3000`
+在浏览器中打开：`http://127.0.0.1:44132/dashboard`
+
+## 运行时优化开关
+
+服务默认已启用后台预热和内存守护，可通过环境变量调整：
+
+- `ENDPOINT_CACHE_MAX_ENTRIES`
+- `WARMUP_BASE_MS` / `WARMUP_MAX_MS`
+- `MEMORY_SOFT_LIMIT_MB`
+- `MEMORY_GUARD_INTERVAL_MS` / `MEMORY_GUARD_COOLDOWN_MS`
 
 ## 如果CSS仍然无法加载
 
@@ -83,4 +102,5 @@ curl -I http://localhost:3000/static/css/style.css
 
 ## 停止服务器
 
-在运行服务器的终端窗口按 `Ctrl+C`
+- 前台模式：在运行服务器的终端窗口按 `Ctrl+C`
+- 后台常驻模式：`systemctl --user stop openclaw-dashboard`

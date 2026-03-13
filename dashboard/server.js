@@ -27,13 +27,28 @@ server.on('connection', (socket) => {
   socket.on('close', () => sockets.delete(socket));
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 44132;
 const HOST = process.env.HOST || '127.0.0.1';
 const collector = new DataCollector();
 const alertManager = new AlertManager();
 const benchmark = new Benchmark();
 const logAnalyzer = new LogAnalyzer();
 const endpointCache = new Map();
+const ENDPOINT_CACHE_MAX_ENTRIES = Math.max(parseInt(process.env.ENDPOINT_CACHE_MAX_ENTRIES || '200', 10) || 200, 50);
+const ENDPOINT_CACHE_SWEEP_MS = Math.max(parseInt(process.env.ENDPOINT_CACHE_SWEEP_MS || '60000', 10) || 60000, 10000);
+const WARMUP_BASE_MS = Math.max(parseInt(process.env.WARMUP_BASE_MS || '30000', 10) || 30000, 5000);
+const WARMUP_MAX_MS = Math.max(parseInt(process.env.WARMUP_MAX_MS || '120000', 10) || 120000, WARMUP_BASE_MS);
+const MEMORY_SOFT_LIMIT_MB = Math.max(parseInt(process.env.MEMORY_SOFT_LIMIT_MB || '512', 10) || 512, 128);
+const MEMORY_GUARD_INTERVAL_MS = Math.max(parseInt(process.env.MEMORY_GUARD_INTERVAL_MS || '30000', 10) || 30000, 10000);
+const MEMORY_GUARD_COOLDOWN_MS = Math.max(parseInt(process.env.MEMORY_GUARD_COOLDOWN_MS || '180000', 10) || 180000, 30000);
+let lastHttpRequestAt = Date.now();
+let endpointCacheGcInterval = null;
+let warmCacheTimer = null;
+let memoryGuardInterval = null;
+let warmupCurrentIntervalMs = WARMUP_BASE_MS;
+let warmupStableRounds = 0;
+let warmupLastFingerprint = null;
+let lastMemoryGuardAt = 0;
 
 function makeCacheKey(prefix, params = {}) {
   const normalized = Object.entries(params)
@@ -44,22 +59,62 @@ function makeCacheKey(prefix, params = {}) {
   return normalized ? `${prefix}?${normalized}` : prefix;
 }
 
+function setEndpointCacheValue(key, value, ttlMs) {
+  endpointCache.set(key, {
+    value,
+    expiresAt: Date.now() + ttlMs,
+    lastAccessAt: Date.now()
+  });
+}
+
+function sweepEndpointCache({ aggressive = false } = {}) {
+  const now = Date.now();
+  for (const [key, entry] of endpointCache.entries()) {
+    if (!entry) {
+      endpointCache.delete(key);
+      continue;
+    }
+    if ((entry.expiresAt || 0) <= now) {
+      endpointCache.delete(key);
+    }
+  }
+
+  if (aggressive) {
+    // 软限触发时，尽量释放更多引用，避免长时间积累
+    const keep = Math.floor(ENDPOINT_CACHE_MAX_ENTRIES * 0.35);
+    if (endpointCache.size > keep) {
+      const sorted = [...endpointCache.entries()].sort((a, b) => (a[1].lastAccessAt || 0) - (b[1].lastAccessAt || 0));
+      for (let i = 0; i < sorted.length - keep; i++) endpointCache.delete(sorted[i][0]);
+    }
+  }
+
+  if (endpointCache.size > ENDPOINT_CACHE_MAX_ENTRIES) {
+    const overflow = endpointCache.size - ENDPOINT_CACHE_MAX_ENTRIES;
+    const sorted = [...endpointCache.entries()].sort((a, b) => (a[1].lastAccessAt || 0) - (b[1].lastAccessAt || 0));
+    for (let i = 0; i < overflow; i++) endpointCache.delete(sorted[i][0]);
+  }
+}
+
 async function getOrSetEndpointCache(key, ttlMs, producer) {
   const now = Date.now();
   const cached = endpointCache.get(key);
   if (cached) {
     if (cached.value !== undefined && cached.expiresAt > now) {
+      cached.lastAccessAt = now;
       return cached.value;
     }
     if (cached.promise) {
+      cached.lastAccessAt = now;
       return cached.promise;
     }
+    endpointCache.delete(key);
   }
 
   const promise = Promise.resolve()
     .then(producer)
     .then((value) => {
-      endpointCache.set(key, { value, expiresAt: Date.now() + ttlMs });
+      setEndpointCacheValue(key, value, ttlMs);
+      if (endpointCache.size > ENDPOINT_CACHE_MAX_ENTRIES) sweepEndpointCache();
       return value;
     })
     .catch((error) => {
@@ -67,7 +122,8 @@ async function getOrSetEndpointCache(key, ttlMs, producer) {
       throw error;
     });
 
-  endpointCache.set(key, { promise, expiresAt: now + ttlMs });
+  endpointCache.set(key, { promise, expiresAt: now + ttlMs, lastAccessAt: now });
+  if (endpointCache.size > ENDPOINT_CACHE_MAX_ENTRIES * 1.2) sweepEndpointCache();
   return promise;
 }
 
@@ -87,7 +143,10 @@ async function withTimeout(task, timeoutMs, label) {
 
 // 确保路径正确 - 使用绝对路径
 const staticDir = path.resolve(__dirname, 'static');
+const distDir = path.resolve(__dirname, 'dist');
+const isProduction = fs.existsSync(distDir) && fs.existsSync(path.join(distDir, 'index.html'));
 console.log('静态文件目录:', staticDir);
+console.log('Vite 构建目录:', distDir, '(生产模式:', isProduction, ')');
 console.log('__dirname:', __dirname);
 console.log('静态目录存在:', fs.existsSync(staticDir));
 console.log('CSS文件存在:', fs.existsSync(path.join(staticDir, 'css', 'style.css')));
@@ -95,6 +154,10 @@ console.log('CSS文件存在:', fs.existsSync(path.join(staticDir, 'css', 'style
 // 中间件
 app.use(cors());
 app.use(express.json());
+app.use((req, res, next) => {
+  lastHttpRequestAt = Date.now();
+  next();
+});
 
 // 多工具统一入口路由
 const toolboxStaticDir = process.env.TOOLBOX_STATIC_DIR || path.join(require('os').homedir(), 'toolbox-static', 'toolbox');
@@ -178,6 +241,11 @@ app.use('/static', (req, res, next) => {
 // 注意：express.static会自动去掉URL前缀，所以/static/css/style.css会映射到staticDir/css/style.css
 app.use('/static', express.static(staticDir));
 
+// 生产模式：Vite 构建产物（JS/CSS bundles）
+if (isProduction) {
+  app.use('/assets', express.static(path.join(distDir, 'assets')));
+}
+
 // WebSocket客户端管理
 const clients = new Set();
 let isShuttingDown = false;
@@ -205,6 +273,119 @@ function broadcast(data) {
       client.send(message);
     }
   });
+}
+
+function normalizeMessageStreamLimit(rawLimit) {
+  const parsed = Math.min(parseInt(rawLimit, 10) || 100, 100);
+  if (parsed <= 20) return 20;
+  if (parsed <= 50) return 50;
+  return 100;
+}
+
+function hasRuntimeActivity() {
+  return clients.size > 0 || (Date.now() - lastHttpRequestAt) < 60000;
+}
+
+function buildWarmupFingerprint(snapshot, modelUsage30, modelUsageAll) {
+  const s = snapshot && snapshot.health ? snapshot.health : {};
+  const usage30Summary = modelUsage30 && modelUsage30.summary ? modelUsage30.summary : {};
+  const usageAllSummary = modelUsageAll && modelUsageAll.summary ? modelUsageAll.summary : {};
+  return [
+    snapshot?.timestamp || '',
+    s.score || 0,
+    s.status || '',
+    usage30Summary.totalCalls || 0,
+    usage30Summary.totalTokens || 0,
+    usageAllSummary.totalCalls || 0,
+    usageAllSummary.totalTokens || 0
+  ].join('|');
+}
+
+function startEndpointCacheSweeper() {
+  if (endpointCacheGcInterval) clearInterval(endpointCacheGcInterval);
+  endpointCacheGcInterval = setInterval(() => {
+    try {
+      sweepEndpointCache();
+    } catch (error) {
+      console.error('清理 endpointCache 失败:', error);
+    }
+  }, ENDPOINT_CACHE_SWEEP_MS);
+}
+
+async function runWarmCacheOnce() {
+  const [snapshot, modelUsage30, modelUsageAll] = await Promise.all([
+    withTimeout(() => collector.getDashboardSnapshot(true), 12000, '预热 dashboard 快照'),
+    withTimeout(() => collector.getModelUsageStats(30), 12000, '预热模型使用量(30天)'),
+    withTimeout(() => collector.getModelUsageStats(null), 12000, '预热模型使用量(全量)')
+  ]);
+
+  // 预热到 endpoint cache，首个请求可直接命中
+  setEndpointCacheValue(makeCacheKey('api/models/usage', { days: 30 }), modelUsage30, 60000);
+  setEndpointCacheValue(makeCacheKey('api/models/usage', { days: 'all' }), modelUsageAll, 60000);
+  setEndpointCacheValue('api/dashboard', {
+    ...snapshot,
+    alerts: alertManager.getActiveAlerts(),
+    timestamp: new Date().toISOString()
+  }, 15000);
+
+  return buildWarmupFingerprint(snapshot, modelUsage30, modelUsageAll);
+}
+
+function startWarmCacheLoop() {
+  if (warmCacheTimer) clearTimeout(warmCacheTimer);
+  const scheduleNext = () => {
+    warmCacheTimer = setTimeout(async () => {
+      try {
+        const fingerprint = await runWarmCacheOnce();
+        const changed = fingerprint !== warmupLastFingerprint;
+        warmupLastFingerprint = fingerprint;
+
+        if (changed || hasRuntimeActivity()) {
+          warmupStableRounds = 0;
+          warmupCurrentIntervalMs = WARMUP_BASE_MS;
+        } else {
+          warmupStableRounds += 1;
+          if (warmupStableRounds >= 2) {
+            warmupCurrentIntervalMs = Math.min(WARMUP_MAX_MS, warmupCurrentIntervalMs * 2);
+            warmupStableRounds = 0;
+          }
+        }
+      } catch (error) {
+        console.error('后台预热失败:', error.message || error);
+        warmupCurrentIntervalMs = Math.min(WARMUP_MAX_MS, Math.max(WARMUP_BASE_MS, warmupCurrentIntervalMs));
+      } finally {
+        scheduleNext();
+      }
+    }, warmupCurrentIntervalMs);
+  };
+
+  // 首次启动后尽快预热，再进入动态周期
+  warmupCurrentIntervalMs = 1000;
+  scheduleNext();
+}
+
+function startMemoryGuardLoop() {
+  if (memoryGuardInterval) clearInterval(memoryGuardInterval);
+  memoryGuardInterval = setInterval(() => {
+    try {
+      const now = Date.now();
+      if (now - lastMemoryGuardAt < MEMORY_GUARD_COOLDOWN_MS) return;
+      const usage = process.memoryUsage();
+      const rssMb = Math.round(usage.rss / 1024 / 1024);
+
+      if (rssMb < MEMORY_SOFT_LIMIT_MB) return;
+
+      console.warn(`[内存守护] RSS=${rssMb}MB 超过软限 ${MEMORY_SOFT_LIMIT_MB}MB，执行缓存清理`);
+      sweepEndpointCache({ aggressive: true });
+      collector.clearCache();
+      if (typeof global.gc === 'function') {
+        global.gc();
+      }
+      lastMemoryGuardAt = now;
+    } catch (error) {
+      console.error('内存守护执行失败:', error);
+    }
+  }, MEMORY_GUARD_INTERVAL_MS);
 }
 
 // 定期推送更新数据
@@ -388,22 +569,9 @@ app.get('/api/channels/status', async (req, res) => {
   }
 });
 
-// 模型配额
+// 模型配额（已下线，保持兼容）
 app.get('/api/models/quota', async (req, res) => {
-  try {
-    console.log('[API] /api/models/quota 被调用');
-    const data = await collector.getModelsQuota();
-    console.log('[API] /api/models/quota 返回数据:', JSON.stringify(data.map(m => ({
-      provider: m.provider,
-      name: m.name,
-      quotaUsed: m.quotaUsed,
-      quotaTotal: m.quotaTotal
-    })), null, 2));
-    res.json(data);
-  } catch (error) {
-    console.error('获取模型配额失败:', error);
-    res.status(500).json({ error: error.message });
-  }
+  res.json([]);
 });
 
 // 最近日志
@@ -755,31 +923,15 @@ app.get('/api/alerts/active', async (req, res) => {
   }
 });
 
-// 模型配额详细监控
+// 模型配额详细监控（已下线，保持兼容）
 app.get('/api/models/quota/detailed', async (req, res) => {
-  try {
-    const models = await collector.getModelsQuota();
-    const stats = await collector.getModelsStats();
-    
-    // 这里可以添加实际的API余额查询逻辑
-    // 例如调用Minimax、Moonshot等API查询余额
-    
-    const result = {
-      models: models.map(model => ({
-        ...model,
-        usage: stats.details.find(d => d.name === model.name) || { count: 0, percentage: 0 }
-      })),
-      summary: {
-        totalModels: models.length,
-        totalUsage: stats.details.reduce((sum, d) => sum + d.count, 0)
-      }
-    };
-
-    res.json(result);
-  } catch (error) {
-    console.error('获取模型配额详情失败:', error);
-    res.status(500).json({ error: error.message });
-  }
+  res.json({
+    models: [],
+    summary: {
+      totalModels: 0,
+      totalUsage: 0
+    }
+  });
 });
 
 // ========== 阶段5：数据导出和历史对比 API ==========
@@ -787,12 +939,11 @@ app.get('/api/models/quota/detailed', async (req, res) => {
 // 导出JSON格式
 app.get('/api/export/json', async (req, res) => {
   try {
-    const [system, agents, tasks, channels, models, logs, health] = await Promise.all([
+    const [system, agents, tasks, channels, logs, health] = await Promise.all([
       collector.getSystemOverview(),
       collector.getAgentsList(),
       collector.getTasks(),
       collector.getChannelsStatus(),
-      collector.getModelsQuota(),
       collector.getRecentLogs(1000),
       collector.getHealthStatus()
     ]);
@@ -803,7 +954,6 @@ app.get('/api/export/json', async (req, res) => {
       agents,
       tasks,
       channels,
-      models,
       logs,
       health
     };
@@ -868,12 +1018,11 @@ app.get('/api/export/csv', async (req, res) => {
 // 生成HTML报告
 app.get('/api/export/report', async (req, res) => {
   try {
-    const [system, agents, tasks, channels, models, logs, health] = await Promise.all([
+    const [system, agents, tasks, channels, logs, health] = await Promise.all([
       collector.getSystemOverview(),
       collector.getAgentsList(),
       collector.getTasks(),
       collector.getChannelsStatus(),
-      collector.getModelsQuota(),
       collector.getRecentLogs(100),
       collector.getHealthStatus()
     ]);
@@ -884,7 +1033,6 @@ app.get('/api/export/report', async (req, res) => {
       agents,
       tasks,
       channels,
-      models,
       logs: logs.slice(0, 100),
       health
     };
@@ -1025,7 +1173,7 @@ app.get('/api/statistics', async (req, res) => {
 // 获取消息流
 app.get('/api/messages/stream', async (req, res) => {
   try {
-    const limit = Math.min(parseInt(req.query.limit) || 100, 100);
+    const limit = normalizeMessageStreamLimit(req.query.limit);
     const agentId = req.query.agentId;
     const taskId = req.query.taskId;
     const compact = req.query.compact !== '0';
@@ -1335,55 +1483,67 @@ app.get('/api/debug/static-path', (req, res) => {
   });
 });
 
+// 运行时状态（后台预热与内存守护）
+app.get('/api/runtime/status', (req, res) => {
+  const usage = process.memoryUsage();
+  res.json({
+    timestamp: new Date().toISOString(),
+    memory: {
+      rssMb: Math.round(usage.rss / 1024 / 1024),
+      heapUsedMb: Math.round(usage.heapUsed / 1024 / 1024),
+      heapTotalMb: Math.round(usage.heapTotal / 1024 / 1024),
+      externalMb: Math.round(usage.external / 1024 / 1024),
+      softLimitMb: MEMORY_SOFT_LIMIT_MB
+    },
+    cache: {
+      endpointEntries: endpointCache.size,
+      endpointMaxEntries: ENDPOINT_CACHE_MAX_ENTRIES
+    },
+    warmup: {
+      enabled: true,
+      intervalMs: warmupCurrentIntervalMs,
+      baseIntervalMs: WARMUP_BASE_MS,
+      maxIntervalMs: WARMUP_MAX_MS,
+      stableRounds: warmupStableRounds,
+      hasFingerprint: Boolean(warmupLastFingerprint),
+      active: hasRuntimeActivity()
+    },
+    guards: {
+      endpointSweepMs: ENDPOINT_CACHE_SWEEP_MS,
+      memoryGuardMs: MEMORY_GUARD_INTERVAL_MS,
+      memoryGuardCooldownMs: MEMORY_GUARD_COOLDOWN_MS,
+      lastMemoryGuardAt: lastMemoryGuardAt ? new Date(lastMemoryGuardAt).toISOString() : null
+    }
+  });
+});
+
 // 完整数据（用于初始化）
 app.get('/api/dashboard', async (req, res) => {
   try {
-    // 并行获取所有数据以提高性能
-    const [system, agents, tasks, channels, models, logs, health] = await Promise.all([
-      collector.getSystemOverview(),
-      collector.getAgentsList(),
-      collector.getTasks(),
-      collector.getChannelsStatus(),
-      collector.getModelsQuota(),
-      collector.getRecentLogs(50),
-      collector.getHealthStatus()
-    ]);
+    const data = await getOrSetEndpointCache('api/dashboard', 15000, async () => {
+      // 并行获取所有数据以提高性能
+      const [system, agents, tasks, channels, logs, health] = await Promise.all([
+        collector.getSystemOverview(),
+        collector.getAgentsList(),
+        collector.getTasks(),
+        collector.getChannelsStatus(),
+        collector.getRecentLogs(50),
+        collector.getHealthStatus()
+      ]);
 
-    // 调试：打印模型配额信息
-    console.log('[API] /api/dashboard 返回的模型数据:');
-    if (models && models.length > 0) {
-      models.forEach(m => {
-        console.log(`  ${m.provider} - ${m.name}: quotaUsed=${m.quotaUsed} (${typeof m.quotaUsed}), quotaTotal=${m.quotaTotal} (${typeof m.quotaTotal})`);
-      });
-      
-      // 检查是否有非零配额
-      const modelsWithQuota = models.filter(m => m.quotaTotal > 0);
-      if (modelsWithQuota.length > 0) {
-        console.log(`[API] ✅ 找到 ${modelsWithQuota.length} 个有配额的模型`);
-        modelsWithQuota.forEach(m => {
-          console.log(`  ✅ ${m.provider} - ${m.name}: ${m.quotaTotal}`);
-        });
-      } else {
-        console.log(`[API] ⚠️ 警告: 所有模型的配额都是 0`);
-      }
-    } else {
-      console.log('  [警告] 模型数据为空');
-    }
-
-    // 获取活跃告警
-    const activeAlerts = alertManager.getActiveAlerts();
-
-    const data = {
-      system,
-      agents,
-      tasks,
-      channels,
-      models,
-      logs,
-      health,
-      alerts: activeAlerts,
-      timestamp: new Date().toISOString()
-    };
+      // 获取活跃告警
+      const activeAlerts = alertManager.getActiveAlerts();
+      return {
+        system,
+        agents,
+        tasks,
+        channels,
+        logs,
+        health,
+        alerts: activeAlerts,
+        timestamp: new Date().toISOString()
+      };
+    });
     res.json(data);
   } catch (error) {
     console.error('获取完整数据失败:', error);
@@ -1392,7 +1552,19 @@ app.get('/api/dashboard', async (req, res) => {
 });
 
 function sendDashboardPage(req, res) {
-  const layout = req.query.layout || 'default'; // default 或 sidebar
+  // 生产模式：优先从 dist/ 目录提供 Vite 构建产物
+  if (isProduction) {
+    const htmlPath = path.join(distDir, 'index.html');
+    return res.sendFile(htmlPath, (err) => {
+      if (err) {
+        console.error('发送Dashboard页面失败(dist):', err);
+        // 回退到原始 index.html
+        const fallback = path.join(__dirname, 'index.html');
+        res.sendFile(fallback);
+      }
+    });
+  }
+  const layout = req.query.layout || 'default';
   const htmlFile = layout === 'sidebar' ? 'index-sidebar.html' : 'index.html';
   const htmlPath = path.join(__dirname, htmlFile);
   res.sendFile(htmlPath, (err) => {
@@ -1430,27 +1602,43 @@ server.listen(PORT, HOST, () => {
   console.log(`   配置文件: ${path.join(require('os').homedir(), '.openclaw', 'openclaw.json')}\n`);
   startPeriodicUpdates();
   startHistoryRecording();
+  startEndpointCacheSweeper();
+  startWarmCacheLoop();
+  startMemoryGuardLoop();
 });
+
+function shutdown(signal) {
+  console.log(`收到${signal}信号，正在关闭服务器...`);
+  isShuttingDown = true;
+  if (updateInterval) clearInterval(updateInterval);
+  if (historyRecordInterval) clearInterval(historyRecordInterval);
+  if (endpointCacheGcInterval) clearInterval(endpointCacheGcInterval);
+  if (warmCacheTimer) clearTimeout(warmCacheTimer);
+  if (memoryGuardInterval) clearInterval(memoryGuardInterval);
+  sweepEndpointCache({ aggressive: true });
+  collector.clearCache();
+  configWatcher.close();
+  for (const ws of clients) {
+    try {
+      ws.close(1001, 'server shutdown');
+    } catch (error) {
+      // ignore
+    }
+  }
+  for (const socket of sockets) {
+    try {
+      socket.destroy();
+    } catch (error) {
+      // ignore
+    }
+  }
+  server.close(() => {
+    console.log('服务器已关闭');
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(0), SHUTDOWN_GRACE_MS).unref();
+}
 
 // 优雅关闭
-process.on('SIGTERM', () => {
-  console.log('收到SIGTERM信号，正在关闭服务器...');
-  if (updateInterval) clearInterval(updateInterval);
-  if (historyRecordInterval) clearInterval(historyRecordInterval);
-  configWatcher.close();
-  server.close(() => {
-    console.log('服务器已关闭');
-    process.exit(0);
-  });
-});
-
-process.on('SIGINT', () => {
-  console.log('收到SIGINT信号，正在关闭服务器...');
-  if (updateInterval) clearInterval(updateInterval);
-  if (historyRecordInterval) clearInterval(historyRecordInterval);
-  configWatcher.close();
-  server.close(() => {
-    console.log('服务器已关闭');
-    process.exit(0);
-  });
-});
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

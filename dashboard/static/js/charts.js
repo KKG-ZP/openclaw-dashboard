@@ -642,6 +642,75 @@ class ChartsManager {
     });
   }
 
+  // ========== 模型每日 Token 趋势图 ==========
+  renderModelTokenTrend(data) {
+    const canvas = document.getElementById('modelTokenTrendCanvas');
+    if (!canvas || !data.byDay || data.byDay.length === 0) return;
+
+    const ctx = canvas.getContext('2d');
+
+    if (this.charts.modelTokenTrend) {
+      this.charts.modelTokenTrend.destroy();
+    }
+
+    const labels = data.byDay.map(d => {
+      const parts = d.date.split('-');
+      return `${parts[1]}/${parts[2]}`;
+    });
+
+    const tokenData = data.byDay.map(d => d.totalTokens || 0);
+
+    this.charts.modelTokenTrend = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Token 用量',
+          data: tokenData,
+          backgroundColor: 'rgba(139, 92, 246, 0.5)',
+          borderColor: 'rgb(139, 92, 246)',
+          borderWidth: 1,
+          borderRadius: 3
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: function(context) {
+                const v = context.parsed.y;
+                return v >= 1000000 ? `${(v/1000000).toFixed(2)}M tokens`
+                  : v >= 1000 ? `${(v/1000).toFixed(1)}K tokens`
+                  : `${v} tokens`;
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: { display: false },
+            ticks: { font: { size: 10 } }
+          },
+          y: {
+            beginAtZero: true,
+            ticks: {
+              font: { size: 10 },
+              callback: function(value) {
+                return value >= 1000000 ? `${(value/1000000).toFixed(1)}M`
+                  : value >= 1000 ? `${(value/1000).toFixed(0)}K`
+                  : value;
+              }
+            },
+            title: { display: true, text: 'Tokens', font: { size: 11 } }
+          }
+        }
+      }
+    });
+  }
+
   // 更新所有图表
   async updateAllCharts() {
     await Promise.all([

@@ -1,0 +1,15 @@
+acceptanceMatrix:
+  - scenario: knowledge_worker
+    expected:
+      - phased_steps
+      - structured_notes
+      - reminder_created
+  - scenario: programmer
+    expected:
+      - code_change_summary
+      - verification_evidence
+      - risk_statement
+  - scenario: c_class_boundary
+    expected:
+      - gate_required
+      - no_direct_execution
